@@ -1,4 +1,4 @@
-"""AllergyIntolerance: onset when stated, else when it was recorded."""
+"""AllergyIntolerance: onset when stated, else when it was recorded. It has no end."""
 
 from collections.abc import Sequence
 
@@ -25,7 +25,7 @@ def project_allergy(resource: Json, ctx: Context) -> Sequence[TimelineEventDraft
     verification = verification_code(resource)
     if verification in NOT_TRUE_VERIFICATIONS:
         return []
-    onset_start, onset_end = time_choice(ctx, resource, "onset")
+    onset_start, _ = time_choice(ctx, resource, "onset")
     recorded = resource.get("recordedDate")
     return [
         draft(
@@ -34,7 +34,6 @@ def project_allergy(resource: Json, ctx: Context) -> Sequence[TimelineEventDraft
             kind=TimelineKind.ALLERGY,
             occurred=onset_start or clinical_time(ctx, "recordedDate", recorded),
             concept=first_concept(resource.get("code")),
-            period_end=onset_end,
             recorded_at=instant_of(ctx, "recordedDate", recorded),
             status=status_code(resource.get("clinicalStatus")),
             detail_json=detail_json(
