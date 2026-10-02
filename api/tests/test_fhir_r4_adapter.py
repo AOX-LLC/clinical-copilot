@@ -183,7 +183,9 @@ async def test_a_malformed_bundle_is_a_typed_error() -> None:
         await adapter.list_patients(None, page_size=5)
 
 
-@pytest.mark.parametrize("resource_id", ["../metadata", "a/b", "a b", "", "x" * 65, "id?x=1"])
+@pytest.mark.parametrize(
+    "resource_id", ["../metadata", "a/b", "a b", "", "x" * 65, "id?x=1", ".", "..", "...."]
+)
 async def test_an_id_that_could_change_the_request_path_never_reaches_the_server(
     resource_id: str,
 ) -> None:
@@ -208,6 +210,33 @@ async def test_a_resource_type_that_could_change_the_request_path_never_reaches_
         await adapter.get_record("Observation/../metadata", "obs-1")
 
     assert requests == []
+
+
+@pytest.mark.parametrize("resource_type", ["metadata", "DocumentReference", "Bundle", "patient"])
+async def test_only_resource_types_the_adapter_reads_are_requested(resource_type: str) -> None:
+    requests: list[httpx.Request] = []
+    adapter = _replay_adapter(requests)
+
+    with pytest.raises(RecordNotFoundError, match="does not read"):
+        await adapter.get_record(resource_type, "x")
+
+    assert requests == []
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(b'{"resourceType":"Patient","id":"someone-else"}', id="another id"),
+        pytest.param(b'{"resourceType":"Encounter","id":"obs-1"}', id="another type"),
+        pytest.param(b'{"resourceType":"Bundle","id":"obs-1"}', id="a bundle"),
+        pytest.param(b'{"resourceType":"Observation"}', id="no id"),
+    ],
+)
+async def test_a_response_for_a_different_resource_than_asked_is_refused(answer: bytes) -> None:
+    adapter = _adapter(lambda _request: httpx.Response(200, content=answer))
+
+    with pytest.raises(PermanentSourceError, match="different resource"):
+        await adapter.get_record("Observation", "obs-1")
 
 
 async def test_an_exact_version_other_than_the_current_one_is_not_supported() -> None:
