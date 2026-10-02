@@ -29,7 +29,9 @@ services:
       retries: 20
 
   migrate:
-    # One-shot: runs Alembic as the owner role, then exits.
+    # One-shot: runs Alembic as the owner role, then exits. It is the only service that
+    # builds the API image; api, seed and ingest run that image (pull_policy: never). Four
+    # services building one tag at once raced on naming it ("image already exists").
     build: ./api
     image: clinical-copilot-api:local
     command: ["alembic", "upgrade", "head"]
@@ -48,7 +50,7 @@ services:
         condition: service_healthy
 
   api:
-    build: ./api
+    pull_policy: never
     image: clinical-copilot-api:local
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
@@ -151,7 +153,7 @@ services:
   seed:
     # One-shot: loads the committed synthetic dataset into the FHIR server, then exits.
     # fhir-candle keeps its data in memory, so this runs on every `up` (ADR 0013).
-    build: ./api
+    pull_policy: never
     image: clinical-copilot-api:local
     command: ["python", "-m", "app.fhir_seed", "load", "/data/synthea"]
     restart: "no"
@@ -174,7 +176,7 @@ services:
     # One-shot: reads every patient from the FHIR server into sealed snapshots and the
     # timeline, as the application role, then exits. Idempotent (ADR 0015). The only
     # service that holds the field-encryption keys.
-    build: ./api
+    pull_policy: never
     image: clinical-copilot-api:local
     command: ["python", "-m", "app.ingest"]
     restart: "no"
