@@ -3,7 +3,8 @@
 Each adapter joins the suite by adding a harness to ``HARNESS_FACTORIES``. The in-memory
 fake and the FHIR R4 adapter over recorded responses run by default. ``fhir-live`` runs the
 same suite against the running stack and is skipped unless ``LIVE_FHIR_BASE_URL`` is set;
-the Healthie adapter joins with its own recorded fixtures.
+``healthie-fixture`` runs the Healthie adapter over hand-built synthetic fixtures (not
+recordings; there is no live Healthie run).
 """
 
 import base64
@@ -11,7 +12,7 @@ import json
 import logging
 import os
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -19,6 +20,7 @@ import httpx
 import pytest
 
 from app.ehr.fhir_r4 import FhirR4Adapter
+from app.ehr.healthie import HealthieAdapter, HealthieConfig, sign_webhook
 from app.ehr.ports import (
     ApprovedSummaryDocument,
     EhrAdapter,
@@ -33,6 +35,7 @@ from app.ehr.ports import (
 from app.timeline.canonical import content_sha256
 from app.timeline.vocabulary import SourceKind
 from tests.fixtures import SENTINEL_FAMILY_NAME, populated_fake_adapter
+from tests.recorded.healthie_server import API_KEY, ENDPOINT, FixtureHealthie
 from tests.recorded.replay import BASE_URL, ReplayTransport, ThrottlingTransport
 
 MAX_PAGES = 100
@@ -40,6 +43,22 @@ LIVE_URL_VARIABLE = "LIVE_FHIR_BASE_URL"
 FHIR_SOURCE = SourceSystemRef(code="fhir-local", kind=SourceKind.FHIR_R4)
 # A synthetic patient from the committed dataset, recorded for the offline run and read live.
 CONTRACT_PATIENT_ID = "3b680a6c-b15d-ef35-a863-b733f0230d9d"
+
+
+FAKE_NOTIFICATION = json.dumps(
+    {
+        "events": [
+            {"resource_type": "Observation", "resource_id": "obs-1-1", "event_type": "updated"},
+            {"resource_type": "Observation", "resource_id": "obs-1-2", "event_type": "teleported"},
+        ]
+    }
+).encode()
+FAKE_MALFORMED_NOTIFICATIONS = (
+    b'{"events": "abc"}',
+    b'{"events": [1]}',
+    b'{"events": [{"event_type": "updated", "resource_id": "x"}]}',
+    b"not json",
+)
 
 
 @dataclass
@@ -51,6 +70,20 @@ class AdapterHarness:
     # A distinctive value present in the source payloads that must never surface in logs,
     # error messages or reprs.
     payload_sentinel: str
+    # What notification tests send: a signed body that names one known change and one event the
+    # adapter must ignore, the change expected from it, headers that must be refused, and
+    # bodies that are signed but malformed.
+    notification_body: bytes = FAKE_NOTIFICATION
+    expected_change: tuple[str, str] = ("obs-1-1", "updated")
+    forged_signature_headers: Mapping[str, str] = field(
+        default_factory=lambda: {"x-fake-signature": "0" * 64}
+    )
+    non_ascii_signature_headers: Mapping[str, str] = field(
+        default_factory=lambda: {"x-fake-signature": "\u00e9" * 64}
+    )
+    malformed_notification_bodies: tuple[bytes, ...] = FAKE_MALFORMED_NOTIFICATIONS
+    # A resource type the adapter does not read at all, for the not-found test.
+    missing_record_type: str = "Observation"
 
 
 def _fake_harness() -> AdapterHarness:
@@ -92,8 +125,55 @@ def _fhir_live_harness() -> AdapterHarness:
     return _fhir_harness(transport, base_url, CONTRACT_PATIENT_ID, sentinel)
 
 
+HEALTHIE_SOURCE = SourceSystemRef(code="healthie-fixture", kind=SourceKind.HEALTHIE)
+HEALTHIE_WEBHOOK_PATH = "/webhooks/healthie"
+HEALTHIE_SENTINEL = "Quillfeather-Healthie"
+
+
+def _healthie_harness() -> AdapterHarness:
+    transport = FixtureHealthie()
+    config = HealthieConfig(
+        endpoint=ENDPOINT,
+        api_key=API_KEY,
+        webhook_secret="whsec_synthetic-test-secret",
+        webhook_path=HEALTHIE_WEBHOOK_PATH,
+        write_back_enabled=True,
+    )
+    adapter = HealthieAdapter(HEALTHIE_SOURCE, httpx.AsyncClient(transport=transport), config)
+    wrong_digest = {"Content-Digest": "SHA-256=" + "0" * 64, "Signature": "sig1=" + "0" * 64}
+    return AdapterHarness(
+        adapter=adapter,
+        patient_external_id="9001",
+        throttle_next_call=transport.throttle_next_call,
+        sign_notification=lambda body: sign_webhook(config, body),
+        payload_sentinel=HEALTHIE_SENTINEL,
+        notification_body=json.dumps(
+            {
+                "resource_id": "7101",
+                "resource_id_type": "Medication",
+                "event_type": "medication.updated",
+            }
+        ).encode(),
+        expected_change=("7101", "medication.updated"),
+        forged_signature_headers=wrong_digest,
+        non_ascii_signature_headers={
+            "Content-Digest": wrong_digest["Content-Digest"],
+            "Signature": "sig1=" + "\u00e9" * 64,
+        },
+        malformed_notification_bodies=(
+            b"[1]",
+            b'{"event_type": "patient.updated"}',
+            b'{"event_type": "patient.updated", "resource_id": "../x"}',
+            b'{"resource_id": "9001"}',
+            b"not json",
+        ),
+        missing_record_type="Observation",
+    )
+
+
 HARNESS_FACTORIES: dict[str, Callable[[], AdapterHarness]] = {
     "fake": _fake_harness,
+    "healthie-fixture": _healthie_harness,
     "fhir-recorded": _fhir_recorded_harness,
     "fhir-live": _fhir_live_harness,
 }
@@ -224,7 +304,7 @@ async def test_no_naive_datetime_crosses_the_boundary(harness: AdapterHarness) -
 
 async def test_an_unknown_record_is_not_found(harness: AdapterHarness) -> None:
     with pytest.raises(RecordNotFoundError):
-        await harness.adapter.get_record("Observation", f"missing-{uuid4()}")
+        await harness.adapter.get_record(harness.missing_record_type, f"missing-{uuid4()}")
 
 
 async def test_throttling_is_a_typed_error_with_a_retry_hint(harness: AdapterHarness) -> None:
@@ -253,29 +333,18 @@ async def test_write_back_is_idempotent_or_declared_unsupported(harness: Adapter
 
 
 async def test_notifications_need_a_valid_signature(harness: AdapterHarness) -> None:
-    body = json.dumps(
-        {
-            "events": [
-                {"resource_type": "Observation", "resource_id": "obs-1-1", "event_type": "updated"},
-                {
-                    "resource_type": "Observation",
-                    "resource_id": "obs-1-2",
-                    "event_type": "teleported",
-                },
-            ]
-        }
-    ).encode()
+    body = harness.notification_body
     if not (await harness.adapter.capabilities()).supports_notifications:
         with pytest.raises(OperationNotSupportedError):
             harness.adapter.parse_notification({}, body)
         return
 
     with pytest.raises(SignatureInvalidError):
-        harness.adapter.parse_notification({"x-fake-signature": "0" * 64}, body)
+        harness.adapter.parse_notification(harness.forged_signature_headers, body)
 
     changes = harness.adapter.parse_notification(harness.sign_notification(body), body)
     assert [(change.resource_id, change.event_type) for change in changes] == [
-        ("obs-1-1", "updated")
+        harness.expected_change
     ]
 
 
@@ -306,32 +375,22 @@ async def test_a_page_size_below_one_is_refused(harness: AdapterHarness) -> None
         await harness.adapter.list_patients(None, page_size=0)
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        pytest.param(b'{"events": "abc"}', id="events not a list"),
-        pytest.param(b'{"events": [1]}', id="event not an object"),
-        pytest.param(
-            b'{"events": [{"event_type": "updated", "resource_id": "x"}]}',
-            id="missing resource type",
-        ),
-        pytest.param(b"not json", id="not json"),
-    ],
-)
 async def test_a_signed_but_malformed_notification_is_a_typed_error(
-    harness: AdapterHarness, body: bytes
+    harness: AdapterHarness,
 ) -> None:
     if not (await harness.adapter.capabilities()).supports_notifications:
         pytest.skip("adapter declares no notifications")
 
-    with pytest.raises(PermanentSourceError):
-        harness.adapter.parse_notification(harness.sign_notification(body), body)
+    for body in harness.malformed_notification_bodies:
+        with pytest.raises(PermanentSourceError):
+            harness.adapter.parse_notification(harness.sign_notification(body), body)
 
 
 async def test_a_non_ascii_signature_is_rejected_not_crashed(harness: AdapterHarness) -> None:
     if not (await harness.adapter.capabilities()).supports_notifications:
         pytest.skip("adapter declares no notifications")
-    body = b'{"events": []}'
 
     with pytest.raises(SignatureInvalidError):
-        harness.adapter.parse_notification({"x-fake-signature": "\u00e9" * 64}, body)
+        harness.adapter.parse_notification(
+            harness.non_ascii_signature_headers, harness.notification_body
+        )
