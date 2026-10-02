@@ -14,7 +14,11 @@ Status: Accepted. Implements [0008](0008-field-level-encryption.md) and settles 
   - `kek_version` records which KEK wraps the row. A run holding another version refuses to load the key rather than guess.
   - Destroying a key sets `wrapped_key` to NULL and `destroyed_at`; a check constraint ties the two together. The application role may only read and insert `data_key`, so destruction is an owner-role act. After it, nothing in the database can open that patient's sealed fields, and the same transaction deletes the patient's blind-index rows so the patient can no longer be found by name, birth date or identifier.
 - **Keys outside the database.** `FIELD_KEK` and `BLIND_INDEX_KEY` are 32 random bytes, base64-encoded, from the environment or a secret file (`NAME` or `NAME_FILE`, exactly one). They must differ, errors name the variable and never its value, and the key objects hide their bytes from `repr`.
-- **In a run.** Data keys are unwrapped into an in-memory key ring before a transaction seals or opens anything, because the sealer interface is synchronous. Two runs creating the same key at once converge on one row.
+- **In a run.** Data keys are unwrapped into an in-memory key ring before a transaction seals or opens anything, because the sealer interface is synchronous.
+  - Callers load keys at the start of each transaction. Every `load` re-reads the rows for the owners asked about in one query, so a key destroyed by another process stops working at the next `load`; sealing and opening between loads use the ring alone.
+  - A key created in a transaction that rolls back is evicted from the ring, because no row holds it and anything sealed under it could never be opened.
+  - Two runs creating the same key at once converge on one row.
+  - The ring is not bounded: it grows with the patients a run touches, which suits short-lived import runs.
 - **Blind indexes.** `patient_blind_index` holds one HMAC-SHA256 digest per name token, birth date and identifier, keyed by `BLIND_INDEX_KEY` and domain-separated by kind. It replaces the single `patient.name_bidx` column.
   - Names are split into letter runs, folded to NFKC lower case and stripped of digits, so Synthea's `Abe604` and a typed `abe` meet.
   - Lookup is exact: every token of a search name must be present, there is no prefix or fuzzy matching, and a different blind-index key finds nothing.
@@ -24,7 +28,7 @@ Status: Accepted. Implements [0008](0008-field-level-encryption.md) and settles 
 
 ## Not built yet
 - The ingest command that seals source payloads and timeline fields with `FieldSealer`. The ingest function already takes the sealer; the command that supplies it is the next piece of Phase 2.
-- A KEK rotation command. The re-wrap step exists and is tested; nothing runs it over the table.
+- A KEK rotation command. The re-wrap step exists and is tested; nothing runs it over the table. A run holds exactly one KEK version, so a rotation has to re-wrap every row before any process switches to the new version.
 - Key custody beyond a secret file: a KMS or mounted secret in a deployment (Phase 5).
 
 ## Consequences

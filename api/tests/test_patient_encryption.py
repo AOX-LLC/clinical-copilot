@@ -10,7 +10,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import event, func, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
@@ -92,6 +92,19 @@ async def _session(engine: AsyncEngine, *, as_app: bool = True) -> AsyncIterator
         if as_app:
             await session.execute(text(f"SET LOCAL ROLE {APP_ROLE}"))
         yield session
+
+
+class _Abandon(Exception):  # noqa: N818  # a signal to roll back, not an error
+    pass
+
+
+async def _load_then_roll_back(
+    engine: AsyncEngine, keystore: KeyStore, owners: list[uuid.UUID | None]
+) -> None:
+    """Load keys in a transaction and abandon it, so the transaction rolls back."""
+    async with _session(engine) as session:
+        await keystore.load(session, owners)
+        raise _Abandon
 
 
 async def _create(engine: AsyncEngine, crypto: Crypto, identity: PatientIdentity) -> uuid.UUID:
@@ -262,6 +275,76 @@ async def test_a_destroyed_patient_key_makes_that_patients_data_unreadable(
         ).one()
     assert row.wrapped_key is None
     assert row.destroyed_at is not None
+
+
+async def test_a_key_created_in_a_rolled_back_transaction_is_not_kept_in_the_ring(
+    engine: AsyncEngine, secrets: tuple[bytes, bytes]
+) -> None:
+    run = _crypto(*secrets)
+    context = SealContext("source_record", "payload_enc", uuid.uuid4(), None)
+
+    with pytest.raises(_Abandon):
+        await _load_then_roll_back(engine, run.keystore, [None])
+    assert None not in run.ring
+
+    async with _session(engine) as session:
+        await run.keystore.load(session, [None])
+    sealed = run.sealer.seal(b"practitioner", context)
+
+    later = _crypto(*secrets)  # a new process reads the committed key, not the abandoned one
+    async with _session(engine) as session:
+        await later.keystore.load(session, [None])
+    assert later.sealer.open(sealed, context) == b"practitioner"
+
+
+async def test_a_committed_key_survives_a_later_rollback(
+    engine: AsyncEngine, crypto: Crypto
+) -> None:
+    async with _session(engine) as session:
+        await crypto.keystore.load(session, [None])
+
+    with pytest.raises(_Abandon):
+        await _load_then_roll_back(engine, crypto.keystore, [None])
+
+    assert None in crypto.ring
+
+
+async def test_a_key_destroyed_by_another_process_stops_working_at_the_next_load(
+    engine: AsyncEngine, secrets: tuple[bytes, bytes]
+) -> None:
+    running = _crypto(*secrets)
+    abe = await _create(engine, running, ABE)
+    assert abe in running.ring
+    async with _session(engine, as_app=False) as session:
+        await destroy_patient_key(session, abe)
+
+    async with _session(engine) as session:
+        with pytest.raises(KeyUnavailableError, match="destroyed"):
+            await running.keystore.load(session, [abe])
+        with pytest.raises(KeyUnavailableError):
+            await read_identity(session, abe, running.sealer)
+    assert abe not in running.ring
+
+
+async def test_loading_many_keys_costs_one_query_for_the_lookup(
+    engine: AsyncEngine, secrets: tuple[bytes, bytes]
+) -> None:
+    writer = _crypto(*secrets)
+    ids = [await _create(engine, writer, identity) for identity in (ABE, BEA, CAL)]
+    statements: list[str] = []
+
+    def count(_c: object, _cur: object, statement: str, *_rest: object) -> None:
+        if "FROM data_key" in statement:
+            statements.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", count)
+    try:
+        async with _session(engine) as session:
+            await _crypto(*secrets).keystore.load(session, [*ids, None])
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", count)
+
+    assert len(statements) == 1
 
 
 async def test_a_key_cannot_be_marked_destroyed_while_it_is_still_stored(
