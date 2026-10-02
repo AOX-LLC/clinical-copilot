@@ -1,5 +1,6 @@
 """What the FHIR R4 adapter does beyond the shared contract. Synthetic data only."""
 
+import base64
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -318,6 +319,148 @@ async def test_write_back_and_notifications_are_declared_unsupported() -> None:
         await adapter.write_back(document, "key")
     with pytest.raises(OperationNotSupportedError):
         adapter.parse_notification({}, b"{}")
+
+
+async def test_later_pages_come_from_the_snapshot_without_touching_the_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(fhir_r4, "CHANGES_PAGE_SIZE", 5)
+    requests: list[httpx.Request] = []
+    adapter = _replay_adapter(requests)
+    patient_id = next(iter(ReplayTransport().patient_ids))
+
+    first = await adapter.fetch_changes(patient_id, ALL_KINDS, None, None)
+    requests_for_first_page = len(requests)
+    assert first.next_cursor is not None
+    cursor: str | None = first.next_cursor
+    while cursor is not None:
+        cursor = (await adapter.fetch_changes(patient_id, ALL_KINDS, None, cursor)).next_cursor
+
+    assert len(requests) == requests_for_first_page
+
+
+async def test_pages_stay_consistent_when_the_source_changes_mid_listing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(fhir_r4, "CHANGES_PAGE_SIZE", 2)
+    resources = [
+        b'{"resourceType":"Observation","id":"obs-%d","status":"final"}' % number
+        for number in (2, 3, 4, 5)
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _bundle_response(*resources)
+
+    adapter = _adapter(handler)
+    kinds = frozenset({RecordKind.OBSERVATION})
+
+    first = await adapter.fetch_changes(PATIENT_ID, kinds, None, None)
+    # A record that sorts before everything already served appears at the source.
+    resources.insert(0, b'{"resourceType":"Observation","id":"obs-1","status":"final"}')
+    second = await adapter.fetch_changes(PATIENT_ID, kinds, None, first.next_cursor)
+
+    served = [record.resource_id for record in (*first.items, *second.items)]
+    assert served == ["obs-2", "obs-3", "obs-4", "obs-5"]
+    assert second.next_cursor is None
+
+
+async def test_a_new_listing_sees_what_changed_at_the_source() -> None:
+    resources = [b'{"resourceType":"Observation","id":"obs-2","status":"final"}']
+    adapter = _adapter(lambda _request: _bundle_response(*resources))
+    kinds = frozenset({RecordKind.OBSERVATION})
+
+    before = await adapter.fetch_changes(PATIENT_ID, kinds, None, None)
+    resources.append(b'{"resourceType":"Observation","id":"obs-3","status":"final"}')
+    after = await adapter.fetch_changes(PATIENT_ID, kinds, None, None)
+
+    assert [r.resource_id for r in before.items] == ["obs-2"]
+    assert [r.resource_id for r in after.items] == ["obs-2", "obs-3"]
+
+
+async def test_a_cursor_whose_snapshot_expired_is_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(fhir_r4, "CHANGES_PAGE_SIZE", 3)
+    clock = [1000.0]
+    monkeypatch.setattr(fhir_r4, "_now", lambda: clock[0])
+    adapter = _replay_adapter([])
+    patient_id = next(iter(ReplayTransport().patient_ids))
+    first = await adapter.fetch_changes(patient_id, ALL_KINDS, None, None)
+    assert first.next_cursor is not None
+
+    clock[0] += fhir_r4.SNAPSHOT_SECONDS + 1
+
+    with pytest.raises(RetryableSourceError, match="start the listing again"):
+        await adapter.fetch_changes(patient_id, ALL_KINDS, None, first.next_cursor)
+
+
+async def test_a_cursor_cannot_be_used_again_after_its_listing_finished(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(fhir_r4, "CHANGES_PAGE_SIZE", 40)
+    adapter = _replay_adapter([])
+    patient_id = next(iter(ReplayTransport().patient_ids))
+    first = await adapter.fetch_changes(patient_id, ALL_KINDS, None, None)
+    assert first.next_cursor is not None
+    last = await adapter.fetch_changes(patient_id, ALL_KINDS, None, first.next_cursor)
+    cursors = [first.next_cursor]
+    while last.next_cursor is not None:
+        cursors.append(last.next_cursor)
+        last = await adapter.fetch_changes(patient_id, ALL_KINDS, None, last.next_cursor)
+
+    with pytest.raises(RetryableSourceError):
+        await adapter.fetch_changes(patient_id, ALL_KINDS, None, cursors[0])
+
+
+async def test_a_cursor_from_another_listing_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(fhir_r4, "CHANGES_PAGE_SIZE", 3)
+    adapter = _replay_adapter([])
+    first_patient, second_patient = ReplayTransport().patient_ids[:2]
+    page = await adapter.fetch_changes(first_patient, ALL_KINDS, None, None)
+    assert page.next_cursor is not None
+
+    with pytest.raises(PermanentSourceError, match="different listing"):
+        await adapter.fetch_changes(second_patient, ALL_KINDS, None, page.next_cursor)
+    with pytest.raises(PermanentSourceError, match="different listing"):
+        await adapter.list_patients(page.next_cursor, page_size=2)
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [
+        pytest.param(
+            base64.urlsafe_b64encode(b"snapshot:" + b"a" * 32 + b":-1").decode(), id="negative"
+        ),
+        pytest.param(base64.urlsafe_b64encode(b"snapshot:short:1").decode(), id="short id"),
+        pytest.param(base64.urlsafe_b64encode(b"snapshot:" + b"a" * 32).decode(), id="no offset"),
+        pytest.param(base64.urlsafe_b64encode(b"offset:3").decode(), id="another adapter's cursor"),
+        pytest.param("%%%", id="not base64"),
+    ],
+)
+async def test_a_cursor_this_adapter_did_not_issue_is_refused_before_any_request(
+    cursor: str,
+) -> None:
+    requests: list[httpx.Request] = []
+    adapter = _replay_adapter(requests)
+
+    with pytest.raises(PermanentSourceError):
+        await adapter.list_patients(cursor, page_size=2)
+
+    assert requests == []
+
+
+async def test_only_a_few_snapshots_are_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(fhir_r4, "CHANGES_PAGE_SIZE", 3)
+    adapter = _replay_adapter([])
+    patient_id = next(iter(ReplayTransport().patient_ids))
+    first = await adapter.fetch_changes(patient_id, ALL_KINDS, None, None)
+    assert first.next_cursor is not None
+
+    for _ in range(fhir_r4.MAX_SNAPSHOTS):
+        await adapter.fetch_changes(patient_id, ALL_KINDS, None, None)
+
+    with pytest.raises(RetryableSourceError):
+        await adapter.fetch_changes(patient_id, ALL_KINDS, None, first.next_cursor)
 
 
 async def _all(

@@ -23,12 +23,12 @@ Status: Accepted. Supersedes the loader sentence in [0002](0002-fhir-server-and-
 - **The FHIR adapter declares what the server lacks:**
   - `supports_versions` is false. Reading an exact version that is not the current one raises `OperationNotSupportedError`; it never returns a different version.
   - `supports_since` is false, a new capability. `fetch_changes` then ignores `since` and returns every record of the requested kinds for the patient. It never filters on `meta.lastUpdated`, which changes on every reload. Ingest already skips content it has seen, by hash ([0003](0003-provenance-snapshots-and-heads.md)).
-  - Paging is the adapter's: it reads the whole result, orders it by resource type and id, and hands out opaque offset cursors. That is acceptable for a panel of tens or hundreds of patients and one patient's records; a server with real paging would replace it.
+  - Paging is the adapter's. When a listing starts it reads the whole result once, orders it by resource type and id, and keeps it in memory for five minutes (at most four listings at a time). Later pages come from that snapshot, so the work is linear and the pages cannot skip or repeat records if the source changes meanwhile. A cursor whose snapshot has expired is a retryable error; the caller starts the listing again. A server with real paging would replace this.
   - Write-back and notifications are not supported and raise `OperationNotSupportedError`.
 - **The contract suite respects the capability.** The "strictly later" test runs only for adapters that declare `supports_since`.
 
 ## Consequences
 - A clean start loads the data in well under a minute, and the load is repeatable. The time to a seeded stack and the loaded server's memory are in [the architecture page](../architecture.md).
-- Every sync of a FHIR source re-reads each patient's records in full. At this scale that is cheap, and it removes a class of silent data loss: a record changed within the same second as the last sync cannot be skipped.
+- Every sync of a FHIR source re-reads each patient's records in full, and it removes a class of silent data loss: a record changed within the same second as the last sync cannot be skipped. The cost is the server's: reading all 28 synthetic patients (13,708 records) took 78 s, 51 s of it in fhir-candle's own observation searches. That is fine for a development dataset and is the reason a real source needs `supports_since`.
 - The adapter reads a patient's observations in one response (2,860 observations for the largest synthetic patient, a few megabytes of JSON). The API's memory limit has to allow that.
 - Replacing fhir-candle with HAPI changes Compose and the capability flags, not the adapter's contract.
