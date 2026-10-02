@@ -113,15 +113,33 @@ async def _post_transaction(
 
 def _count_created(response: httpx.Response, bundle: Mapping[str, Any], label: str) -> int:
     expected = len(bundle["entry"])
-    entries = response.json().get("entry", [])
-    failed = [e for e in entries if not str(e["response"]["status"]).startswith(("200", "201"))]
-    if len(entries) != expected or failed:
+    entries = _json_of(response).get("entry")
+    statuses = [_status_of(entry) for entry in entries] if isinstance(entries, list) else None
+    if statuses is None or None in statuses:
+        raise SeedError(f"{label}: the server's answer is not a transaction response")
+    failed = [status for status in statuses if not str(status).startswith(("200", "201"))]
+    if len(statuses) != expected or failed:
         raise SeedError(f"{label}: {len(failed)} of {expected} entries were not stored")
     return expected
 
 
+def _status_of(entry: object) -> object:
+    response = entry.get("response") if isinstance(entry, dict) else None
+    return response.get("status") if isinstance(response, dict) else None
+
+
+def _json_of(response: httpx.Response) -> dict[str, Any]:
+    try:
+        document = response.json()
+    except ValueError:
+        return {}
+    return document if isinstance(document, dict) else {}
+
+
 async def _verify_patient_count(client: httpx.AsyncClient, minimum: int) -> None:
     response = await client.get("/Patient", params={"_summary": "count"})
-    total = response.json().get("total", 0)
+    total = _json_of(response).get("total")
+    if not response.is_success or not isinstance(total, int):
+        raise SeedError("the server did not answer the patient count check")
     if total < minimum:
         raise SeedError(f"expected at least {minimum} patients on the server, found {total}")

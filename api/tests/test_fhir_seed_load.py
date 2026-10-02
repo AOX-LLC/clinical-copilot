@@ -241,6 +241,65 @@ async def test_a_server_that_holds_fewer_patients_than_loaded_fails_the_load(
             await load_dataset(client, dataset)
 
 
+@pytest.mark.parametrize(
+    ("post_response", "message"),
+    [
+        pytest.param(
+            httpx.Response(200, content=b"<html>"), "not a transaction response", id="html"
+        ),
+        pytest.param(httpx.Response(200, json=[1]), "not a transaction response", id="a list"),
+        pytest.param(
+            httpx.Response(200, json={"entry": [{}, {}, {}]}),
+            "not a transaction response",
+            id="no status",
+        ),
+        pytest.param(
+            httpx.Response(200, json={"entry": "oops"}),
+            "not a transaction response",
+            id="no entries",
+        ),
+    ],
+)
+async def test_a_transaction_response_that_is_not_one_is_a_typed_error(
+    dataset: Path, post_response: httpx.Response, message: str
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"total": 99})
+        return post_response
+
+    async with httpx.AsyncClient(
+        base_url="http://fhir.test/fhir/r4", transport=httpx.MockTransport(handler)
+    ) as client:
+        with pytest.raises(SeedError, match=message):
+            await load_dataset(client, dataset)
+
+
+@pytest.mark.parametrize(
+    "count_response",
+    [
+        pytest.param(httpx.Response(500), id="server error"),
+        pytest.param(httpx.Response(200, content=b"nope"), id="not JSON"),
+        pytest.param(httpx.Response(200, json={"total": "many"}), id="total not a number"),
+    ],
+)
+async def test_a_failed_patient_count_check_is_a_typed_error(
+    dataset: Path, count_response: httpx.Response
+) -> None:
+    server = FakeServer()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and not request.url.path.endswith("/metadata"):
+            return count_response
+        return server.handler(request)
+
+    async with httpx.AsyncClient(
+        base_url="http://fhir.test/fhir/r4", transport=httpx.MockTransport(handler)
+    ) as client:
+        with pytest.raises(SeedError, match="patient count"):
+            await load_dataset(client, dataset)
+
+
 async def test_an_empty_dataset_directory_is_refused(tmp_path: Path) -> None:
     raw = tmp_path / "dataset"
     (raw / PATIENT_DIRECTORY).mkdir(parents=True)
