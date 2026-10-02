@@ -58,15 +58,16 @@ On a host with load average 5 to 12, with the API image already built:
 | --- | --- |
 | `docker compose up -d --wait` from empty volumes | 3 min 57 s (seed 10 s, ingest 110 s) |
 | `docker compose up -d --wait` from a fresh clone, images rebuilt from warm layer cache | 4 min 53 s, healthy, 12,939 timeline rows |
-| Ingest from empty, concurrency 4 | 106 s, 13,708 snapshots, 12,939 timeline rows |
-| Re-run, concurrency 4 | 76 s and 60 s on two runs, 0 snapshots, 0 heads moved |
+| `docker compose up -d --build --wait` from empty volumes with the image rebuilt, at load average 10 | 6 min 18 s, healthy, 12,939 timeline rows: slower than the clone run above, on a busier host, so the 5-minute target is not reliably met on a loaded machine |
+| Ingest from empty, concurrency 4 | 106 s to 115 s, 13,708 snapshots, 12,939 timeline rows; the 115 s run spent 123 s reading and 235 s writing, summed over patients |
+| Re-run, concurrency 4 | 76 s, 60 s and 79 s on three runs, 0 snapshots, 0 heads moved; the 79 s run spent 135 s reading and 152 s writing, summed over patients |
 | Re-run, concurrency 1 | 133 s |
 | Memory during a run | ingest 83 MiB (`docker stats`) and 106 MiB peak RSS, of 256 MiB; fhir-candle peaked at 511 MiB of 768 MiB; postgres 96 MiB |
 
 ## Consequences
 - **A record deleted at the source is not noticed.** The FHIR adapter cannot say what changed ([0013](0013-fhir-seeding-and-adapter-limits.md)), and ingest only ever upserts, so a resource that disappears keeps its head and its timeline rows. The `deleted` record state exists in the schema and nothing sets it yet.
 - A patient's records are held in memory while that patient is ingested. The largest synthetic patient has 2,292 records; four at once fit easily. A source with far larger histories needs streaming per kind.
-- A re-run is bound by reading the source (about 60 to 76 s of the 106 s), not by writing.
+- **A re-run is not bound by reading the source alone.** Timed apart, a no-op re-run spent 135 s reading and 152 s writing, summed over four concurrent patients (79 s wall clock); a first ingest spent 123 s reading and 235 s writing (115 s wall clock). The write side of a no-op is about five statements per record (an insert that conflicts, a select of the snapshot, a head insert that conflicts, a locked select of the head, a head update) and a seal of the payload that is then thrown away. Looking up a patient's snapshots and heads in one query, sending only new or changed records through `ingest_snapshot`, and updating `last_seen_at` in bulk would cut that. It is not done, and the cost grows with the record count on every run.
 - The test that ingests the whole dataset twice takes about 2.5 minutes, which is the bulk of the API CI job's added time.
 - Practitioners and organizations are not ingested. The adapter reads per patient, and nothing in the timeline refers to them yet.
 - **Rows already stored are not re-projected.** Projection runs only when a head moves, so a later fix to a normalizer, or a change of `CLINIC_TIMEZONE` (which [0004](0004-clinical-time-and-timezones.md) says needs `sort_at` recomputed), does not reach rows already ingested. [0003](0003-provenance-snapshots-and-heads.md) calls the timeline rebuildable, and no rebuild command exists yet. Until one does, emptying the database and ingesting again is the way to apply a normalizer change.

@@ -191,7 +191,7 @@ flowchart TD
 
 - **Normalizers** are pure functions from a source record to timeline rows, one per resource type, behind a registry that takes the clinic timezone. Laboratory observations become labs, vital signs become vitals (each component its own row), and the other observation categories produce no rows. Quantities carry a UCUM unit or no number, and times keep the precision the source gave. Patient produces no rows; it feeds the patient's sealed identity.
 - **Failure stays local.** A patient whose record cannot be normalized rolls back alone; the others are ingested and the run ends `failed`.
-- **Re-runs are no-ops.** The adapter returns everything on every read ([ADR 0013](adr/0013-fhir-seeding-and-adapter-limits.md)), and ingest skips content it has seen by hash, so a run costs the read of the source: about 60 to 76 s for the 28 synthetic patients at concurrency 4, 133 s at concurrency 1. An ingest from empty took 106 s.
+- **Re-runs are no-ops.** The adapter returns everything on every read ([ADR 0013](adr/0013-fhir-seeding-and-adapter-limits.md)), and ingest skips content it has seen by hash, so a run costs reading the source and about five database statements per record: 60 to 79 s for the 28 synthetic patients at concurrency 4, 133 s at concurrency 1, split about evenly between reading and writing. An ingest from empty took 106 to 115 s and was write-bound.
 - **A record deleted at the source is not noticed**, because the adapter cannot say what changed and ingest only upserts.
 
 ## Field encryption
