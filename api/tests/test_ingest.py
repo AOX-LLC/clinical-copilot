@@ -3,6 +3,7 @@
 import dataclasses
 import hashlib
 import json
+import traceback
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -301,6 +302,8 @@ async def test_a_database_rejection_names_the_resource_but_not_its_content(
     with pytest.raises(IngestError) as raised:
         await _ingest_once(engine, record, project_inverted_range)
 
-    surfaced = f"{raised.value} {raised.value.__cause__}"
+    surfaced = "".join(traceback.format_exception(raised.value))
     assert "Observation/obs-1-1" in str(raised.value)
+    assert "reference_range_ordered" in str(raised.value)
     assert SENTINEL_FAMILY_NAME not in surfaced
+    assert "Failing row" not in surfaced

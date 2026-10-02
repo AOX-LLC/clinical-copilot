@@ -117,11 +117,23 @@ async def ingest_snapshot(
             await _supersede_rows_of(session, previous_head, now)
             await _project(session, record, snapshot_id, context, now)
     except DBAPIError as error:
-        reason = type(error.orig).__name__ if error.orig is not None else type(error).__name__
         raise IngestError(
-            f"database rejected {record.resource_type}/{record.resource_id}: {reason}"
-        ) from error
+            f"database rejected {record.resource_type}/{record.resource_id}: {_describe(error)}"
+        ) from None  # the driver's error carries "Failing row contains (...)" with row values
     return IngestOutcome(snapshot_id, snapshot_created, head_moved)
+
+
+def _describe(error: DBAPIError) -> str:
+    """Name a database failure by type, SQLSTATE and constraint: never by row values."""
+    # SQLAlchemy's adapter error wraps the driver's own error, which names the constraint.
+    adapter_error = error.orig if error.orig is not None else error
+    driver_error = adapter_error.__cause__ or adapter_error
+    parts = [type(driver_error).__name__]
+    for attribute in ("sqlstate", "constraint_name"):
+        value = getattr(driver_error, attribute, None) or getattr(adapter_error, attribute, None)
+        if value:
+            parts.append(f"{attribute}={value}")
+    return " ".join(parts)
 
 
 def _verify_content_hash(record: SourceRecord) -> None:
