@@ -6,8 +6,6 @@ survive: a new version of a resource, and a server that is wiped and reloaded wi
 identical content (version ids restart at 1, timestamps and ``meta.source`` change).
 """
 
-import base64
-import binascii
 import hashlib
 import hmac
 import json
@@ -17,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from app.ehr.cursors import decode_offset_cursor, encode_offset_cursor
 from app.ehr.ports import (
     AdapterCapabilities,
     ApprovedSummaryDocument,
@@ -114,12 +113,14 @@ class FakeAdapter:
         patient_keys = sorted(
             key for key, kind in self._kinds.items() if kind is RecordKind.PATIENT
         )
-        offset = _decode_cursor(cursor)
+        offset = decode_offset_cursor(cursor)
         page_keys = patient_keys[offset : offset + page_size]
         next_offset = offset + len(page_keys)
         return Page(
             items=tuple(SourcePatient(key[1], self._latest_record(key)) for key in page_keys),
-            next_cursor=_encode_cursor(next_offset) if next_offset < len(patient_keys) else None,
+            next_cursor=encode_offset_cursor(next_offset)
+            if next_offset < len(patient_keys)
+            else None,
         )
 
     async def fetch_changes(
@@ -140,12 +141,12 @@ class FakeAdapter:
             ),
             key=lambda record: (record.source_updated_at, record.resource_type, record.resource_id),
         )
-        offset = _decode_cursor(cursor)
+        offset = decode_offset_cursor(cursor)
         page = changed[offset : offset + CHANGES_PAGE_SIZE]
         next_offset = offset + len(page)
         return Page(
             items=tuple(page),
-            next_cursor=_encode_cursor(next_offset) if next_offset < len(changed) else None,
+            next_cursor=encode_offset_cursor(next_offset) if next_offset < len(changed) else None,
         )
 
     async def get_record(
@@ -240,20 +241,3 @@ def _parse_event(event: Mapping[str, Any]) -> ChangeNotification:
     if not isinstance(resource_type, str) or not isinstance(resource_id, str):
         raise TypeError("resource_type and resource_id must be strings")
     return ChangeNotification(resource_type, resource_id, event["event_type"])
-
-
-def _encode_cursor(offset: int) -> str:
-    return base64.urlsafe_b64encode(f"offset:{offset}".encode()).decode("ascii")
-
-
-def _decode_cursor(cursor: str | None) -> int:
-    if cursor is None:
-        return 0
-    try:
-        label, _, offset_text = base64.urlsafe_b64decode(cursor).decode("ascii").partition(":")
-        offset = int(offset_text)
-        if label != "offset" or offset < 0:
-            raise ValueError("not an offset cursor")
-        return offset
-    except (binascii.Error, UnicodeDecodeError, ValueError) as error:
-        raise PermanentSourceError("cursor is not one this source issued") from error
