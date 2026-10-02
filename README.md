@@ -9,13 +9,13 @@ Built by [AOX](https://automatedoperationsexperts.com).
 
 ## Synthetic data only
 
-Every patient in this project is synthetic. Patients will be generated with Synthea, and a small simulated lab feed will add the lab results. The project never uses, stores or accepts real patient data, and you should not load real data into it.
+Every patient in this project is synthetic. The 28 patients are generated with Synthea and committed with the script that regenerates them (`data/synthea/`), and a small simulated lab feed will add the lab results. The project never uses, stores or accepts real patient data, and you should not load real data into it.
 
 Security controls are mapped to the HIPAA Security Rule's technical safeguards in [docs/threat-model.md](docs/threat-model.md). This is a demonstration project and makes no compliance claim.
 
 ## Status
 
-In development. Phase 1 provides the architecture, the normalized timeline schema, the EHR adapter contract, the Compose stack and CI. Synthetic patient import, labs and summaries come in later phases. Mock mode, which replays recorded model responses and needs no API key, arrives with the first model call.
+In development. Phase 1 provides the architecture, the normalized timeline schema, the EHR adapter contract, the Compose stack and CI. Phase 2a adds the pinned synthetic dataset, a service that loads it into the local FHIR server, a FHIR R4 adapter on the same contract suite, and field-level encryption. Normalized import, labs and summaries come in later phases. Mock mode, which replays recorded model responses and needs no API key, arrives with the first model call.
 
 ## Architecture
 

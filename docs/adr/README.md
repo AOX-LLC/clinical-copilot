@@ -11,9 +11,10 @@ Each record states one decision, why it was made, and what it costs. Records are
 | [0005](0005-ehr-adapter-contract.md) | One adapter interface and one contract suite for every EHR | Accepted |
 | [0006](0006-agent-library-seam.md) | Model plumbing from a shared library; clinical logic stays here | Accepted |
 | [0007](0007-authentication-and-rbac.md) | API-owned sessions with MFA; deny-by-default RBAC with care-team scoping | Accepted |
-| [0008](0008-field-level-encryption.md) | AES-GCM field encryption with per-patient envelope keys | Accepted |
+| [0008](0008-field-level-encryption.md) | AES-GCM field encryption with per-patient envelope keys | Accepted; built per 0014 |
 | [0009](0009-llm-context-audit-and-minimization.md) | One context builder: minimize, audit every item, then call | Accepted |
 | [0010](0010-signed-lab-webhook.md) | HMAC-signed lab webhook with timestamp and event-id replay protection | Accepted |
 | [0011](0011-summary-citations-through-edits.md) | Citations point at snapshots; edits create revisions; approval checks staleness | Accepted |
 | [0012](0012-synthetic-dataset.md) | A pinned, trimmed Synthea dataset, committed | Accepted |
 | [0013](0013-fhir-seeding-and-adapter-limits.md) | Seed fhir-candle with PUT transactions, and adapt to what it cannot do | Accepted |
+| [0014](0014-field-encryption-implementation.md) | How field encryption is built: key layout, blind indexes and what is not yet wired | Accepted |

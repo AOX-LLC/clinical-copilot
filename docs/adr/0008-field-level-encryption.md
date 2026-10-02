@@ -1,6 +1,6 @@
 # 0008. AES-GCM field encryption with per-patient envelope keys
 
-Status: Accepted (columns in Phase 1; encryption built later)
+Status: Accepted. Built in Phase 2a; the implementation choices are in [0014](0014-field-encryption-implementation.md).
 
 ## Context
 Disk encryption does not protect against a leaked dump, a backup copied to the wrong place, or a database user reading tables directly. Encrypting every column, though, would make the timeline impossible to query, sort or trend.
