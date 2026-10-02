@@ -6,6 +6,7 @@
 # Session worktrees and local-only session rules
 .worktrees/
 CLAUDE.local.md
+.claude/
 
 # Python
 __pycache__/
