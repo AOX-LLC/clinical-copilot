@@ -42,7 +42,7 @@ from app.ehr.ports import (
     SourcePatient,
     SourceRecord,
 )
-from app.timeline.ingest import IngestContext, IngestError, ingest_snapshot
+from app.timeline.ingest import IngestContext, IngestError, ingest_snapshot, tombstone_unseen
 from app.timeline.models import ImportRun, SourceSystem
 from app.timeline.normalize import NormalizationError, build_projector, parse_resource
 from app.timeline.normalize.patient import identity_from_fhir_patient
@@ -84,6 +84,7 @@ class PatientResult:
     records: Counter[str] = field(default_factory=Counter)
     snapshots_created: int = 0
     heads_moved: int = 0
+    tombstoned: int = 0
     fetch_seconds: float = 0.0
     write_seconds: float = 0.0
 
@@ -98,6 +99,7 @@ class IngestSummary:
     records_seen: int = 0
     snapshots_created: int = 0
     heads_moved: int = 0
+    tombstoned: int = 0
     records_by_type: Counter[str] = field(default_factory=Counter)
     failures: list[str] = field(default_factory=list)
     # Summed over patients, so with concurrent patients they exceed the wall-clock ``seconds``.
@@ -202,6 +204,7 @@ async def _record_outcome(
     summary.records_seen += sum(result.records.values())
     summary.snapshots_created += result.snapshots_created
     summary.heads_moved += result.heads_moved
+    summary.tombstoned += result.tombstoned
     summary.fetch_seconds += result.fetch_seconds
     summary.write_seconds += result.write_seconds
     summary.records_by_type.update(result.records)
@@ -264,6 +267,15 @@ class _PatientIngest:
             for record in records:
                 tally.append(await ingest_snapshot(session, record, context, now))
                 result.records[record.resource_type] += 1
+            # The listing above read to its end (a failure raises before this point and rolls
+            # the patient back), so what the source did not return this time is gone from it.
+            result.tombstoned = await tombstone_unseen(
+                session,
+                self.source_system_id,
+                patient_id,
+                {(record.resource_type, record.resource_id) for record in records},
+                now,
+            )
         result.write_seconds = time.monotonic() - write_started
         result.snapshots_created = sum(item.snapshot_created for item in tally)
         result.heads_moved = sum(item.head_moved for item in tally)

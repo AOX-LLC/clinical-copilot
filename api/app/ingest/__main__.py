@@ -88,13 +88,14 @@ def _report(summary: IngestSummary) -> None:
     )
     logger.info(
         "ingest %s: %d patients (%d new), %d records, %d snapshots created, %d heads moved, "
-        "%d skipped (key destroyed), %.1f s, peak RSS %.0f MiB",
+        "%d tombstoned, %d skipped (key destroyed), %.1f s, peak RSS %.0f MiB",
         summary.status.value,
         summary.patients,
         summary.patients_created,
         summary.records_seen,
         summary.snapshots_created,
         summary.heads_moved,
+        summary.tombstoned,
         summary.patients_skipped,
         summary.seconds,
         summary.peak_rss_mib,

@@ -177,3 +177,57 @@ def test_downgrade_refuses_to_drop_the_kind_while_care_plan_rows_exist(
         command.downgrade(config, "0002")
 
     assert "care_plan" in asyncio.run(_timeline_kinds(empty_database_url))
+
+
+async def _head_columns(database_url: str) -> set[str]:
+    engine = create_async_engine(database_url, poolclass=NullPool)
+    async with engine.connect() as connection:
+        rows = await connection.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns"
+                " WHERE table_name = 'source_resource_head'"
+            )
+        )
+        columns = {row.column_name for row in rows}
+    await engine.dispose()
+    return columns
+
+
+async def _tombstone_a_head(database_url: str) -> None:
+    await _insert_care_plan_row(database_url)
+    engine = create_async_engine(database_url, poolclass=NullPool)
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT INTO source_resource_head (source_system_id, resource_type, resource_id,"
+                " source_record_id, last_seen_at, changed_at, deleted_at)"
+                " SELECT source_system_id, resource_type, resource_id, id, now(), now(), now()"
+                " FROM source_record LIMIT 1"
+            )
+        )
+    await engine.dispose()
+
+
+def test_the_head_tombstone_is_added_and_removed_by_migration_0004(
+    empty_database_url: str,
+) -> None:
+    config = alembic_config(empty_database_url)
+
+    command.upgrade(config, "0004")
+    assert "deleted_at" in asyncio.run(_head_columns(empty_database_url))
+    command.downgrade(config, "0003")
+    assert "deleted_at" not in asyncio.run(_head_columns(empty_database_url))
+    command.upgrade(config, "head")
+
+
+def test_downgrade_refuses_to_drop_the_tombstone_while_tombstoned_heads_exist(
+    empty_database_url: str,
+) -> None:
+    config = alembic_config(empty_database_url)
+    command.upgrade(config, "head")
+    asyncio.run(_tombstone_a_head(empty_database_url))
+
+    with pytest.raises(RuntimeError, match="tombstoned source resources exist"):
+        command.downgrade(config, "0003")
+
+    assert "deleted_at" in asyncio.run(_head_columns(empty_database_url))
