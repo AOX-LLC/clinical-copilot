@@ -100,6 +100,9 @@ jobs:
           cp .env.example .env
           sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 24)/" .env
           sed -i "s/^APP_DB_PASSWORD=.*/APP_DB_PASSWORD=$(openssl rand -hex 24)/" .env
+          # Base64 holds no "|", so it is a safe sed delimiter here.
+          sed -i "s|^FIELD_KEK=.*|FIELD_KEK=$(openssl rand -base64 32)|" .env
+          sed -i "s|^BLIND_INDEX_KEY=.*|BLIND_INDEX_KEY=$(openssl rand -base64 32)|" .env
       - name: Start stack (migrate runs as a dependency)
         run: docker compose up -d --wait --wait-timeout 300 postgres api web fhir
       - name: Check endpoints
@@ -110,6 +113,11 @@ jobs:
           # The seed service runs before the API starts: the 28 synthetic patients must be there.
           patients="$(curl -fsS 'http://127.0.0.1:4603/fhir/r4/Patient?_summary=count' | python3 -c 'import json,sys; print(json.load(sys.stdin)["total"])')"
           test "$patients" = 28
+          # The ingest service runs before the API starts: the timeline must be filled.
+          sql() { docker compose exec -T postgres psql -U copilot_owner -d clinical_copilot -tAc "$1"; }
+          test "$(sql "SELECT status FROM import_run ORDER BY started_at DESC LIMIT 1")" = succeeded
+          test "$(sql "SELECT count(*) FROM patient")" = 28
+          test "$(sql "SELECT count(*) FROM timeline_event WHERE superseded_at IS NULL")" = 12939
       - name: Show logs on failure
         if: failure()
         run: docker compose logs

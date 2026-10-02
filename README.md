@@ -32,7 +32,7 @@ See [docs/architecture.md](docs/architecture.md), [docs/threat-model.md](docs/th
 Prerequisite: Docker with Compose v2.
 
 ```sh
-cp .env.example .env    # then set the two passwords
+cp .env.example .env    # then set the two passwords and the two keys (see the file)
 docker compose up -d --wait
 ```
 

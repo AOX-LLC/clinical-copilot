@@ -72,6 +72,8 @@ services:
         condition: service_completed_successfully
       seed:
         condition: service_completed_successfully
+      ingest:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
@@ -167,6 +169,36 @@ services:
     depends_on:
       fhir:
         condition: service_healthy
+
+  ingest:
+    # One-shot: reads every patient from the FHIR server into sealed snapshots and the
+    # timeline, as the application role, then exits. Idempotent (ADR 0015). The only
+    # service that holds the field-encryption keys.
+    build: ./api
+    image: clinical-copilot-api:local
+    command: ["python", "-m", "app.ingest"]
+    restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 100
+    mem_limit: 256m
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      DATABASE_URL: postgresql+asyncpg://copilot_app:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}@postgres:5432/clinical_copilot
+      FHIR_BASE_URL: http://fhir:5826/fhir/r4
+      CLINIC_TIMEZONE: ${CLINIC_TIMEZONE:-America/New_York}
+      FIELD_KEK: ${FIELD_KEK:?set FIELD_KEK in .env (openssl rand -base64 32)}
+      FIELD_KEK_VERSION: ${FIELD_KEK_VERSION:-1}
+      BLIND_INDEX_KEY: ${BLIND_INDEX_KEY:?set BLIND_INDEX_KEY in .env (openssl rand -base64 32)}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      seed:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:
