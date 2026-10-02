@@ -1,5 +1,6 @@
 """Every normalizer, on resources from the committed dataset. No database."""
 
+import dataclasses
 import json
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -380,3 +381,55 @@ def test_every_resource_in_the_dataset_projects_without_error() -> None:
             produced += len(project_resource(resource))
 
     assert produced == 12_939
+
+
+def _read(resource: dict[str, Any]) -> object:
+    """What ingest reads from a resource: a patient's identity, anything else's timeline rows."""
+    label = f"{resource['resourceType']}/{resource['id']}"
+    if resource["resourceType"] == "Patient":
+        return identity_from_fhir_patient(resource, label)
+    return project_resource(resource)
+
+
+def _year_one(resource: dict[str, Any]) -> None:
+    resource["performedPeriod"] = {"start": "0001-01-01T00:00:00+01:00"}
+
+
+@pytest.mark.parametrize(
+    ("resource_type", "resource_id", "damage"),
+    [
+        ("Condition", RESOLVED_CONDITION, lambda r: r["code"].update(coding={"a": 1})),
+        ("Encounter", ENCOUNTER, lambda r: r.update(type={"a": 1})),
+        ("Observation", LEUKOCYTES, lambda r: r.update(interpretation={"a": 1})),
+        ("Procedure", PROCEDURE, _year_one),
+        ("Patient", PATIENT, lambda r: r.update(extension=[1])),
+    ],
+)
+def test_a_resource_of_an_unexpected_shape_is_a_normalization_error(
+    resource_type: str, resource_id: str, damage: Any
+) -> None:
+    resource = dataset_resource(resource_type, resource_id)
+    damage(resource)
+
+    with pytest.raises(NormalizationError, match=f"{resource_type}/{resource_id}"):
+        _read(resource)
+
+
+def test_json_nested_past_the_interpreter_limit_is_a_normalization_error() -> None:
+    nested = b"[" * 100_000 + b"]" * 100_000
+    record = record_of(dataset_resource("Procedure", PROCEDURE))
+    deep = dataclasses.replace(record, payload=nested)
+
+    with pytest.raises(NormalizationError):
+        PROJECT(deep)
+
+
+def test_list_items_that_are_not_objects_are_ignored_not_errors() -> None:
+    blood_pressure = dataset_resource("Observation", BLOOD_PRESSURE)
+    blood_pressure["component"].append("not an object")
+    medication = dataset_resource("MedicationRequest", INLINE_MEDICATION)
+    medication["dosageInstruction"] = [1]
+
+    assert len(project_resource(blood_pressure)) == 2
+    (row,) = project_resource(medication)
+    assert row.value_text is None

@@ -26,6 +26,19 @@ from app.timeline.normalize.procedure import project_procedure
 
 __all__ = ["NormalizationError", "build_projector", "parse_resource"]
 
+# What reading a resource of an unexpected shape raises: a dict where a list belongs, a number
+# out of calendar range, JSON nested past the interpreter's limit. The source is a trust
+# boundary, so each becomes a NormalizationError that fails one patient and not the run.
+SHAPE_ERRORS = (
+    KeyError,
+    IndexError,
+    TypeError,
+    AttributeError,
+    ValueError,
+    OverflowError,
+    RecursionError,
+)
+
 Normalizer = Callable[[Json, Context], Sequence[TimelineEventDraft]]
 
 NORMALIZERS: dict[str, Normalizer] = {
@@ -49,6 +62,9 @@ def build_projector(clinic_zone: ZoneInfo) -> TimelineProjector:
         if normalize is None:
             raise NormalizationError(f"no normalizer for resource type {record.resource_type}")
         context = Context(label, clinic_zone, record.source_updated_at)
-        return normalize(parse_resource(record.payload, label), context)
+        try:
+            return list(normalize(parse_resource(record.payload, label), context))
+        except SHAPE_ERRORS:
+            raise NormalizationError(f"{label} is not shaped as FHIR R4 expects") from None
 
     return project

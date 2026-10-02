@@ -16,6 +16,15 @@ def project_patient(resource: Json, ctx: Context) -> Sequence[TimelineEventDraft
 
 
 def identity_from_fhir_patient(resource: Json, label: str) -> PatientIdentity:
+    try:
+        return _identity(resource, label)
+    except NormalizationError:
+        raise
+    except (KeyError, IndexError, TypeError, AttributeError, ValueError, OverflowError):
+        raise NormalizationError(f"{label} is not shaped as FHIR R4 expects") from None
+
+
+def _identity(resource: Json, label: str) -> PatientIdentity:
     names = [n for n in resource.get("name") or [] if isinstance(n, dict)]
     official = next((n for n in names if n.get("use") == "official"), names[0] if names else {})
     return PatientIdentity(
