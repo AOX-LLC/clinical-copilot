@@ -25,6 +25,8 @@ ADMIN_URL_VARIABLE = "TEST_DATABASE_ADMIN_URL"
 LIVE_URL_VARIABLE = "LIVE_FHIR_BASE_URL"
 APP_ROLE = "copilot_app"
 MUTABLE_TABLES = (
+    "data_key",
+    "patient_blind_index",
     "timeline_event",
     "source_resource_head",
     "source_record",
