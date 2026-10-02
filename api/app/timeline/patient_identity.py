@@ -20,7 +20,7 @@ from app.crypto.blind_index import BlindIndexer, IndexKind
 from app.crypto.keyring import FieldSealer
 from app.crypto.keystore import KeyStore
 from app.timeline.ingest import SealContext
-from app.timeline.models import Patient, PatientBlindIndex
+from app.timeline.models import Patient, PatientBlindIndex, PatientSourceLink
 
 TABLE = "patient"
 
@@ -55,6 +55,53 @@ async def create_patient(
     await keystore.load(session, [patient_id])
     await replace_identity(session, patient_id, identity, sealer, indexer)
     return patient_id
+
+
+async def resolve_source_patient(
+    session: AsyncSession,
+    source_system_id: int,
+    external_id: str,
+    identity: PatientIdentity,
+    keystore: KeyStore,
+    sealer: FieldSealer,
+    indexer: BlindIndexer,
+) -> tuple[uuid.UUID, bool]:
+    """The patient a source's patient id is linked to, created and linked on first sight.
+
+    Resolution is by source link only. Two source patients with the same name and birth date
+    stay two patients: matching across sources is a policy decision that belongs with the
+    second source, and a wrong merge puts one person's record on another's chart.
+    A new patient is sealed from ``identity``; an existing one is left exactly as it is,
+    because sealing again would change every ciphertext for no change in content. The
+    caller refreshes the identity with ``replace_identity`` when the source's patient
+    record changes. The patient's data key is loaded into the ring either way.
+    Returns the patient id and whether it was just created.
+    """
+    existing = await session.scalar(
+        select(PatientSourceLink.patient_id).where(
+            PatientSourceLink.source_system_id == source_system_id,
+            PatientSourceLink.external_id == external_id,
+        )
+    )
+    if existing is not None:
+        await keystore.load(session, [existing])
+        return existing, False
+
+    patient_id = await create_patient(session, identity, keystore, sealer, indexer)
+    linked = await session.scalar(
+        insert(PatientSourceLink)
+        .values(source_system_id=source_system_id, external_id=external_id, patient_id=patient_id)
+        .on_conflict_do_nothing()
+        .returning(PatientSourceLink.patient_id)
+    )
+    if linked is None:
+        # Another run linked this source patient first; this transaction must not keep a duplicate.
+        raise LinkRaceError(f"source patient {external_id} was linked by another run")
+    return patient_id, True
+
+
+class LinkRaceError(Exception):
+    """Two runs tried to link the same source patient; the caller's transaction should roll back."""
 
 
 async def replace_identity(
