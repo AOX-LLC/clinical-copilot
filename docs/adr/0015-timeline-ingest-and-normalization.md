@@ -52,6 +52,7 @@ On a host with load average 5 to 12, with the API image already built:
 | Measure | Result |
 | --- | --- |
 | `docker compose up -d --wait` from empty volumes | 3 min 57 s (seed 10 s, ingest 110 s) |
+| `docker compose up -d --wait` from a fresh clone, images rebuilt from warm layer cache | 4 min 53 s, healthy, 12,939 timeline rows |
 | Ingest from empty, concurrency 4 | 106 s, 13,708 snapshots, 12,939 timeline rows |
 | Re-run, concurrency 4 | 76 s and 60 s on two runs, 0 snapshots, 0 heads moved |
 | Re-run, concurrency 1 | 133 s |
@@ -63,4 +64,5 @@ On a host with load average 5 to 12, with the API image already built:
 - A re-run is bound by reading the source (about 60 to 76 s of the 106 s), not by writing.
 - The test that ingests the whole dataset twice takes about 2.5 minutes, which is the bulk of the API CI job's added time.
 - Practitioners and organizations are not ingested. The adapter reads per patient, and nothing in the timeline refers to them yet.
+- Only `migrate` builds the API image; `api`, `seed` and `ingest` run it with `pull_policy: never`. With four services building one tag, a fresh clone's first `up` failed on naming the image, so this is what makes the first start work. The cost is that those three services depend on `migrate` having been part of the `up`.
 - Concurrency 4 is the adapter's ceiling, not a tuned optimum. A different source needs its own number.

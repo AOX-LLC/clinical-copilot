@@ -89,7 +89,7 @@ With the dataset seeded **and ingested** (12,939 timeline rows), the stack at re
 
 During an ingest run, sampled every few seconds: the ingest process used about 83 MiB (106 MiB peak RSS) of its 256 MiB, postgres 96 MiB, and fhir-candle peaked at 511 MiB of 768 MiB while it answered the searches. These are `docker stats` usage figures, not the anonymous-memory figures of the tables above.
 
-Time to a healthy, seeded **and ingested** stack from empty volumes, with the API image already built: 3 min 57 s on a host with load average 12 (seed 10 s, ingest 110 s). Image builds and base-image pulls are not included. Ingest timings are in [Ingest, run by run](#ingest-run-by-run) and [ADR 0015](adr/0015-timeline-ingest-and-normalization.md).
+Time to a healthy, seeded **and ingested** stack from empty volumes, with the API image already built: 3 min 57 s on a host with load average 12 (seed 10 s, ingest 110 s). Image builds and base-image pulls are not included. From a fresh clone with both images rebuilt (Docker's layer cache warm, base images already pulled), the first `docker compose up -d --wait` took 4 min 53 s at load average 4 and ended healthy with the timeline filled; a cold cache or a first base-image pull would add to that. Ingest timings are in [Ingest, run by run](#ingest-run-by-run) and [ADR 0015](adr/0015-timeline-ingest-and-normalization.md).
 
 ## Repository layout
 
