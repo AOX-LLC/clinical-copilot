@@ -47,6 +47,10 @@ from app.ehr.ports import (
 
 CHANGES_PAGE_SIZE = 100
 MAX_RETRY_AFTER_SECONDS = 300.0
+# Memory bounds: one response, and the records one listing keeps. Four listings may be held at
+# once, so the worst case stays well inside the API container's memory limit.
+MAX_RESPONSE_BYTES = 24 * 1024 * 1024
+MAX_SNAPSHOT_BYTES = 24 * 1024 * 1024
 SNAPSHOT_SECONDS = 300.0
 MAX_SNAPSHOTS = 4
 REMEMBERED_ENDINGS = 64
@@ -152,8 +156,8 @@ class FhirR4Adapter:
         _require_resource_type(resource_type)
         _require_fhir_id(resource_type, resource_id)
         what = f"{resource_type}/{resource_id}"
-        response = await self._get(f"/{what}", {}, what)
-        resource = _parse_json(response.content)
+        body = await self._get(f"/{what}", {}, what)
+        resource = _parse_json(body)
         if resource.get("resourceType") != resource_type or resource.get("id") != resource_id:
             raise PermanentSourceError(f"{what}: the source returned a different resource")
         current_version = _meta(resource).get("versionId")
@@ -161,7 +165,7 @@ class FhirR4Adapter:
             raise OperationNotSupportedError(
                 f"{resource_type}/{resource_id}: the server cannot return version {version_id}"
             )
-        return self._record_of(resource, payload=response.content)
+        return self._record_of(resource, payload=body)
 
     async def write_back(
         self, document: ApprovedSummaryDocument, idempotency_key: str
@@ -184,6 +188,8 @@ class FhirR4Adapter:
         if cursor is None:
             snapshot_id, offset = uuid4().hex, 0
             items = await load()
+            if _payload_bytes(items) > MAX_SNAPSHOT_BYTES:
+                raise PermanentSourceError("the listing is larger than this adapter will hold")
             self._remember(snapshot_id, _Snapshot(key, items, _now()))
         else:
             snapshot_id, offset = _decode_cursor(cursor)
@@ -234,18 +240,20 @@ class FhirR4Adapter:
         self, resource_type: str, parameters: Mapping[str, str]
     ) -> list[dict[str, Any]]:
         # No _count: fhir-candle truncates without a next link, and returns everything without it.
-        response = await self._get(f"/{resource_type}", parameters, resource_type)
-        return _resources_of(_parse_json(response.content), resource_type)
+        body = await self._get(f"/{resource_type}", parameters, resource_type)
+        return _resources_of(_parse_json(body), resource_type)
 
-    async def _get(self, path: str, parameters: Mapping[str, str], what: str) -> httpx.Response:
+    async def _get(self, path: str, parameters: Mapping[str, str], what: str) -> bytes:
+        """The body of a successful response, read in chunks and refused past the size cap."""
         try:
-            response = await self._client.get(
-                path, params=parameters, headers={"Accept": "application/fhir+json"}
-            )
+            async with self._client.stream(
+                "GET", path, params=parameters, headers={"Accept": "application/fhir+json"}
+            ) as response:
+                _checked(response, what)
+                return await _read_capped(response, what)
         except httpx.TransportError as error:
             reason = type(error).__name__
             raise RetryableSourceError(f"{what}: transport error ({reason})") from None
-        return _checked(response, what)
 
     def _record_of(self, resource: dict[str, Any], payload: bytes | None = None) -> SourceRecord:
         meta = _meta(resource)
@@ -274,6 +282,28 @@ def _decode_cursor(cursor: str) -> tuple[str, int]:
     if label != "snapshot" or not _SNAPSHOT_ID.fullmatch(snapshot_id) or offset < 0:
         raise PermanentSourceError("cursor is not one this source issued")
     return snapshot_id, offset
+
+
+async def _read_capped(response: httpx.Response, what: str) -> bytes:
+    declared = response.headers.get("Content-Length", "")
+    if declared.isdecimal() and int(declared) > MAX_RESPONSE_BYTES:
+        raise PermanentSourceError(f"{what}: the response is larger than this adapter will read")
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in response.aiter_bytes():
+        size += len(chunk)
+        if size > MAX_RESPONSE_BYTES:
+            raise PermanentSourceError(
+                f"{what}: the response is larger than this adapter will read"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _payload_bytes(items: list[Any]) -> int:
+    return sum(
+        len((item.record if isinstance(item, SourcePatient) else item).payload) for item in items
+    )
 
 
 def _checked(response: httpx.Response, what: str) -> httpx.Response:
