@@ -88,6 +88,10 @@ services:
     cap_drop: [ALL]
     pids_limit: 100
     mem_limit: 384m
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.next/cache:uid=1000,gid=1000,mode=0700
     ports:
       - "127.0.0.1:4600:3000"
     environment:
