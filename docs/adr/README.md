@@ -5,7 +5,7 @@ Each record states one decision, why it was made, and what it costs. Records are
 | # | Decision | Status |
 | --- | --- | --- |
 | [0001](0001-repo-layout-and-services.md) | One repo, five Compose services, loopback-only ports | Accepted |
-| [0002](0002-fhir-server-and-memory-budget.md) | HAPI FHIR, capped at 1280 MiB, with a lighter fallback | Accepted |
+| [0002](0002-fhir-server-and-memory-budget.md) | fhir-candle as the local FHIR server, chosen by measurement | Accepted |
 | [0003](0003-provenance-snapshots-and-heads.md) | Immutable hashed snapshots, a head per resource, a rebuildable timeline | Accepted |
 | [0004](0004-clinical-time-and-timezones.md) | Keep the precision the source gave; one practice timezone | Accepted |
 | [0005](0005-ehr-adapter-contract.md) | One adapter interface and one contract suite for every EHR | Accepted |

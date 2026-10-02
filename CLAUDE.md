@@ -9,7 +9,7 @@
 ## Stack
 - API: Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2 (async, asyncpg), Alembic, managed with uv.
 - Web: Next.js App Router, TypeScript (strict), Vitest.
-- Data: Postgres 17 with pgvector. A local HAPI FHIR R4 server plays the EHR.
+- Data: Postgres 17 with pgvector. A local in-memory FHIR R4 server (fhir-candle, base URL `http://127.0.0.1:4603/fhir/r4`) plays the EHR.
 - Docker Compose project `clinical-copilot`; GitHub Actions for CI.
 
 ## Ports (all bound to 127.0.0.1)
@@ -23,7 +23,7 @@
 ## Commands
 ```bash
 cp .env.example .env              # then set the two passwords
-docker compose up -d --wait       # whole stack; FHIR takes a few minutes on first start
+docker compose up -d --wait       # whole stack
 docker compose down
 
 cd api

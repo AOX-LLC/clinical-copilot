@@ -14,7 +14,7 @@ flowchart LR
         api["api<br/>FastAPI · :4601"]
         migrate["migrate<br/>Alembic, one-shot"]
         db[("postgres + pgvector<br/>:4602")]
-        fhir[("fhir<br/>HAPI FHIR R4 · :4603<br/>stand-in EHR")]
+        fhir[("fhir<br/>fhir-candle, FHIR R4 · :4603<br/>stand-in EHR, in memory")]
     end
     healthie[("Healthie GraphQL<br/>(adapter stub until sandbox access)")]
     labs[/"Simulated lab feed<br/>signed webhooks (Phase 3)"/]
@@ -38,17 +38,15 @@ Dashed edges arrive in later phases.
 | api | FastAPI. Owns authentication, RBAC, ingestion, normalization, audit logs and, later, model calls. `/healthz` is liveness; `/readyz` checks the database and that the schema is at the expected revision. | 4601 | 256 MiB |
 | migrate | Runs `alembic upgrade head` as the database owner, then exits. The API starts only after it succeeds. | none | 256 MiB |
 | postgres | Postgres 17 with the pgvector extension. Two roles: the owner runs migrations; the API connects as `copilot_app` with only the grants the migrations give it. | 4602 | 256 MiB |
-| fhir | HAPI FHIR JPA server (R4, embedded H2). Plays the practice's EHR, loaded with synthetic patients. Unauthenticated and loopback-only. | 4603 | 1280 MiB |
+| fhir | fhir-candle, an in-memory FHIR R4 server at `/fhir/r4`. Plays the practice's EHR, loaded with synthetic patients. Unauthenticated and loopback-only. | 4603 | 768 MiB |
 
 ### FHIR server memory
 
-The HAPI FHIR maintainers suggest 4 GB of RAM for reliable operation. This stack runs on machines shared with other work, so HAPI is capped instead: a 768 MiB heap, 256 MiB metaspace and a 1280 MiB container limit. That is ample for a few dozen synthetic patients. See [ADR 0002](adr/0002-fhir-server-and-memory-budget.md).
+The plan capped HAPI FHIR and measured it, with a gate: switch to a lighter server if idle memory exceeded 1.2 GiB. HAPI idled at 1214 MiB against its 1280 MiB cap and took about 12 minutes to become healthy on a loaded host. fhir-candle idled at 53 MiB and was healthy in 33 seconds, so the stack runs fhir-candle. Details and trade-offs are in [ADR 0002](adr/0002-fhir-server-and-memory-budget.md).
 
-Measured idle usage after all services report healthy (`docker stats --no-stream`, empty FHIR store):
+Measured usage after every service reported healthy (`docker stats --no-stream`, empty stores):
 
 MEASUREMENT_TABLE
-
-If HAPI cannot stay healthy under its cap, the fallback is fhir-candle, a small in-memory R4 server. The adapter speaks plain FHIR REST, so nothing else changes.
 
 ## Repository layout
 
@@ -63,7 +61,6 @@ api/                  FastAPI service (Python 3.12, uv)
   migrations/         Alembic revisions
   tests/              unit, database and adapter contract tests
 web/                  Next.js shell
-fhir/                 HAPI configuration overrides
 db/init/              creates the application database role on first start
 docs/                 this page, the threat model, ADRs
 evals/                eval runner (placeholder until the summary agent exists)
