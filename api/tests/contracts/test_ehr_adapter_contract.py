@@ -4,6 +4,7 @@ Each adapter joins the suite by adding a harness to ``HARNESS_FACTORIES``. Phase
 runs the in-memory fake; the FHIR R4 and Healthie adapters join with recorded fixtures.
 """
 
+import base64
 import json
 import logging
 from collections.abc import Callable, Mapping
@@ -97,9 +98,16 @@ async def test_patient_pages_terminate_without_duplicates(harness: AdapterHarnes
     assert len(seen) == len(set(seen))
 
 
-async def test_an_unissued_cursor_is_a_typed_error(harness: AdapterHarness) -> None:
+@pytest.mark.parametrize(
+    "cursor",
+    [
+        pytest.param("not-a-cursor-this-source-issued", id="garbage"),
+        pytest.param(base64.urlsafe_b64encode(b"offset:-1").decode(), id="negative offset"),
+    ],
+)
+async def test_an_unissued_cursor_is_a_typed_error(harness: AdapterHarness, cursor: str) -> None:
     with pytest.raises(PermanentSourceError):
-        await harness.adapter.list_patients("not-a-cursor-this-source-issued", page_size=2)
+        await harness.adapter.list_patients(cursor, page_size=2)
 
 
 async def test_every_record_is_named_and_its_hash_matches_its_payload(
