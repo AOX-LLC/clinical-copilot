@@ -78,6 +78,9 @@ def prepare_dataset(raw_dir: Path, out_dir: Path) -> None:
         raise SeedError("the raw directory needs shared and patient bundles")
 
     (out_dir / PATIENT_DIRECTORY).mkdir(parents=True, exist_ok=True)
+    # A smaller population than last time must not leave the old patients in the dataset.
+    for stale in (out_dir / PATIENT_DIRECTORY).glob("*.json.gz"):
+        stale.unlink()
     shared_entries = [
         entry for path in shared_files for entry in trim_bundle(_read_json(path))["entry"]
     ]
