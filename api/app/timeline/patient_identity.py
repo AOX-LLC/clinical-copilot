@@ -77,7 +77,10 @@ async def replace_identity(
         update(Patient)
         .where(Patient.id == patient_id)
         .values(
-            given_name_enc=seal("given_name_enc", " ".join(identity.given_names) or None),
+            given_name_enc=seal(
+                "given_name_enc",
+                json.dumps(list(identity.given_names)) if identity.given_names else None,
+            ),
             family_name_enc=seal("family_name_enc", identity.family_name),
             birth_date_enc=seal(
                 "birth_date_enc", identity.birth_date.isoformat() if identity.birth_date else None
@@ -117,7 +120,7 @@ async def read_identity(
     birth = open_column("birth_date_enc", row.birth_date_enc)
     identifiers = open_column("identifiers_enc", row.identifiers_enc)
     return PatientIdentity(
-        given_names=tuple(given.split(" ")) if given else (),
+        given_names=tuple(json.loads(given)) if given else (),
         family_name=open_column("family_name_enc", row.family_name_enc),
         birth_date=date.fromisoformat(birth) if birth else None,
         identifiers=tuple(PatientIdentifier(s, v) for s, v in json.loads(identifiers or "[]")),
