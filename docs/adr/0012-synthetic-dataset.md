@@ -19,7 +19,7 @@ Synthea v4.0.0, seed 20260901, reference date 2026-09-01, five years of history,
 | Generation time | about 35 s with the jar cached, about 37 s end to end including the trim |
 | Raw FHIR output, `-p 20` / `-p 25` | 60 MB / 65 MB |
 | Share of raw output that is claims (`ExplanationOfBenefit`, `Claim`) | 19.5 MB of 46.6 MB of resources, for `-p 25` |
-| After trimming, `-p 20` | 14,266 resources, 14.7 MB of JSON, 1.4 MB committed as gzip |
+| After trimming, `-p 20` | 13,994 resources, 16.3 MB of JSON, 1.4 MB committed as gzip |
 | Reproducibility | two runs gave byte-identical patient files; only the two shared-bundle file names carry a timestamp, and their contents match |
 
 ## Decision
@@ -29,8 +29,9 @@ Synthea v4.0.0, seed 20260901, reference date 2026-09-01, five years of history,
   - `patients/<patient-id>.json.gz`: one transaction bundle per patient, as Synthea wrote it.
   - `MANIFEST.sha256`: a checksum of each file's decompressed JSON. Gzip bytes can differ between zlib versions; the content cannot.
 - **Trimmed types:** claims, explanations of benefit, diagnostic reports, document references, provenance, imaging studies, devices, supply deliveries, medication administrations, care teams and practitioner roles. The product never reads them. A care plan's reference to a dropped care team is removed with it.
-- **Kept types:** Patient, Encounter, Condition, Observation, MedicationRequest, Medication, Procedure, Immunization, AllergyIntolerance, CarePlan, Practitioner, Organization, Location.
-- **The files stay in Synthea's own shape** (`POST` entries, `urn:uuid` references). The loader rewrites them on every start ([0013](0013-fhir-seeding-and-adapter-limits.md)).
+- **Kept types:** Patient, Encounter, Condition, Observation, MedicationRequest, Procedure, Immunization, AllergyIntolerance, CarePlan, Practitioner, Organization, Location.
+- **Medications are inlined.** 272 of the 855 medication requests name their medication only through a reference to a separate `Medication` resource, with no display text. A normalizer sees one record at a time, and a citation points at one snapshot, so the medication has to be inside the request. Trimming copies each referenced `Medication` into the request's `contained` list (without server metadata) and rewrites the reference to `#<id>`. The standalone `Medication` resources are then dropped. fhir-candle stores and returns contained resources.
+- **Otherwise the files stay in Synthea's own shape** (`POST` entries, `urn:uuid` references). The loader rewrites them on every start ([0013](0013-fhir-seeding-and-adapter-limits.md)).
 - **Every input is pinned in `data/synthea/generate.sh`:**
   - the jar version and its SHA-256
   - the JRE image digest
