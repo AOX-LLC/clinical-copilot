@@ -61,8 +61,12 @@ RESOURCE_TYPES_BY_KIND: dict[RecordKind, tuple[str, ...]] = {
     RecordKind.ALLERGY: ("AllergyIntolerance",),
 }
 
-_RESOURCE_TYPE = re.compile(r"[A-Za-z]{1,64}")
-_FHIR_ID = re.compile(r"[A-Za-z0-9\-.]{1,64}")
+READ_RESOURCE_TYPES = frozenset(
+    resource_type for types in RESOURCE_TYPES_BY_KIND.values() for resource_type in types
+)
+# A FHIR id may contain dots, but "." and ".." are path segments: httpx collapses them, so
+# ``Patient/.`` would become the search-all request ``Patient``.
+_FHIR_ID = re.compile(r"(?!\.+$)[A-Za-z0-9\-.]{1,64}")
 _SNAPSHOT_ID = re.compile(r"[0-9a-f]{32}")
 _now = time.monotonic
 
@@ -139,6 +143,8 @@ class FhirR4Adapter:
         what = f"{resource_type}/{resource_id}"
         response = await self._get(f"/{what}", {}, what)
         resource = _parse_json(response.content)
+        if resource.get("resourceType") != resource_type or resource.get("id") != resource_id:
+            raise PermanentSourceError(f"{what}: the source returned a different resource")
         current_version = _meta(resource).get("versionId")
         if version_id is not None and version_id != current_version:
             raise OperationNotSupportedError(
@@ -277,12 +283,13 @@ def _retry_after(response: httpx.Response) -> float | None:
 
 
 def _require_resource_type(resource_type: str) -> None:
-    """Refuse values that could change the request path; no such resource can exist."""
-    if not _RESOURCE_TYPE.fullmatch(resource_type):
-        raise RecordNotFoundError("not a FHIR resource type")
+    """Only the types this adapter reads are ever requested, which also keeps paths fixed."""
+    if resource_type not in READ_RESOURCE_TYPES:
+        raise RecordNotFoundError("the adapter does not read that resource type")
 
 
 def _require_fhir_id(resource_type: str, resource_id: str) -> None:
+    """Refuse values that could change the request path; no such resource can exist."""
     if not _FHIR_ID.fullmatch(resource_id):
         raise RecordNotFoundError(f"{resource_type}: not a FHIR id")
 
