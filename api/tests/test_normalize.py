@@ -499,3 +499,22 @@ def test_a_confirmed_condition_keeps_its_verification_in_the_detail() -> None:
     (row,) = project("Condition", ACTIVE_CONDITION)
 
     assert detail(row) == {"verification": "confirmed"}
+
+
+@pytest.mark.parametrize(
+    ("resource_type", "resource_id"),
+    [("Condition", ACTIVE_CONDITION), ("AllergyIntolerance", ALLERGY)],
+)
+def test_the_end_of_an_onset_window_is_not_the_end_of_the_condition(
+    resource_type: str, resource_id: str
+) -> None:
+    resource = dataset_resource(resource_type, resource_id)
+    for key in ("onsetDateTime", "recordedDate"):
+        resource.pop(key, None)
+    resource["onsetPeriod"] = {"start": "2020-01-01", "end": "2020-02-01"}
+
+    (row,) = project_resource(resource)
+
+    assert row.occurred is not None
+    assert row.occurred.calendar_date == date(2020, 1, 1)
+    assert row.period_end is None
