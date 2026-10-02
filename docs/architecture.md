@@ -46,7 +46,15 @@ The plan capped HAPI FHIR and measured it, with a gate: switch to a lighter serv
 
 Measured usage after every service reported healthy (`docker stats --no-stream`, empty stores):
 
-MEASUREMENT_TABLE
+| Service | `docker stats` usage / limit | Anonymous (process) memory |
+| --- | --- | --- |
+| web | 91 MiB / 384 MiB | 35 MiB |
+| api | 69 MiB / 256 MiB | 61 MiB |
+| postgres | 33 MiB / 256 MiB | 6 MiB |
+| fhir (fhir-candle) | 99 MiB / 768 MiB | 67 MiB |
+| **Total** | **292 MiB / 1664 MiB** | **169 MiB** |
+
+Measured 2026-10-02, on a host with load average 12. For comparison, HAPI FHIR alone idled at 1214 MiB anonymous memory under a 1280 MiB cap.
 
 ## Repository layout
 
