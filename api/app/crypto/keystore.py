@@ -9,13 +9,13 @@ UPDATE on ``data_key``, so application code cannot do it, by design.
 import uuid
 from collections.abc import Iterable
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crypto.errors import KeyUnavailableError
 from app.crypto.keyring import KeyRing, KeyWrapper, generate_data_key
-from app.timeline.models import DataKey
+from app.timeline.models import DataKey, PatientBlindIndex
 
 
 class KeyStore:
@@ -58,11 +58,19 @@ class KeyStore:
 
 
 async def destroy_patient_key(session: AsyncSession, patient_id: uuid.UUID) -> bool:
-    """Make a patient's encrypted fields unreadable for good. Owner role only.
+    """Make a patient's encrypted fields unreadable for good, and remove them from lookup.
 
-    Returns False when the patient had no live key. Backups of the wrapped key would defeat
-    this, so the database's backups must be retired on the same schedule as the data.
+    The patient's blind-index rows go in the same transaction: they are digests of the name,
+    birth date and identifiers, and whoever holds the blind-index key could test guesses
+    against them. Owner role only. Returns False when the patient had no live key.
+
+    This does not remove the plaintext timeline columns (codes, values, times) or the
+    source link, which are plaintext by design (ADR 0008). Backups holding the wrapped key
+    would also defeat it, so backups must be retired on the same schedule as the data.
     """
+    await session.execute(
+        delete(PatientBlindIndex).where(PatientBlindIndex.patient_id == patient_id)
+    )
     result = await session.execute(
         update(DataKey)
         .where(DataKey.patient_id == patient_id, DataKey.wrapped_key.is_not(None))
