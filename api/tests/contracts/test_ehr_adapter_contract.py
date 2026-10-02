@@ -82,7 +82,8 @@ class AdapterHarness:
         default_factory=lambda: {"x-fake-signature": "\u00e9" * 64}
     )
     malformed_notification_bodies: tuple[bytes, ...] = FAKE_MALFORMED_NOTIFICATIONS
-    # A resource type the adapter does not read at all, for the not-found test.
+    # A type the adapter reads, asked for with an id that does not exist, so the not-found test
+    # reaches the source's own answer.
     missing_record_type: str = "Observation"
 
 
@@ -168,7 +169,7 @@ def _healthie_harness() -> AdapterHarness:
             b'{"resource_id": "9001"}',
             b"not json",
         ),
-        missing_record_type="Observation",
+        missing_record_type="Medication",
     )
 
 
