@@ -10,7 +10,7 @@ date for an event regardless of their browser's timezone.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 
@@ -32,9 +32,10 @@ class ClinicalTimeError(ValueError):
 @dataclass(frozen=True, slots=True)
 class ClinicalTime:
     precision: TimePrecision
-    instant: datetime | None
-    calendar_date: date | None
-    raw: str
+    # Clinical times are patient data: keep them out of reprs and error messages.
+    instant: datetime | None = field(repr=False)
+    calendar_date: date | None = field(repr=False)
+    raw: str = field(repr=False)
 
     def __post_init__(self) -> None:
         if self.precision is TimePrecision.INSTANT:
@@ -50,7 +51,7 @@ def parse_fhir_datetime(raw: str) -> ClinicalTime:
     """Parse a FHIR R4 ``date``, ``dateTime`` or ``instant`` string."""
     match = _FHIR_DATETIME.fullmatch(raw)
     if match is None:
-        raise ClinicalTimeError(f"not a FHIR date or dateTime: {raw!r}")
+        raise ClinicalTimeError("not a FHIR date or dateTime")
 
     year, month, day = match["year"], match["month"], match["day"]
     if match["clock"] is not None:
@@ -62,17 +63,17 @@ def parse_fhir_datetime(raw: str) -> ClinicalTime:
             return ClinicalTime(TimePrecision.MONTH, None, date(int(year), int(month), 1), raw)
         return ClinicalTime(TimePrecision.YEAR, None, date(int(year), 1, 1), raw)
     except ValueError as error:
-        raise ClinicalTimeError(f"not a real calendar date: {raw!r}") from error
+        raise ClinicalTimeError("not a real calendar date") from error
 
 
 def _parse_instant(raw: str, offset: str | None) -> ClinicalTime:
     if offset is None:
         # FHIR requires an offset whenever a time is given; guessing one shifts the event.
-        raise ClinicalTimeError(f"time without a UTC offset: {raw!r}")
+        raise ClinicalTimeError("time without a UTC offset")
     try:
         parsed = datetime.fromisoformat(raw)
     except ValueError as error:
-        raise ClinicalTimeError(f"not a real instant: {raw!r}") from error
+        raise ClinicalTimeError("not a real instant") from error
     return ClinicalTime(TimePrecision.INSTANT, parsed.astimezone(UTC), None, raw)
 
 

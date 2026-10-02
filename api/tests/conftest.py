@@ -97,7 +97,9 @@ def empty_database_url() -> Iterator[str]:
 @pytest.fixture
 async def engine(migrated_database_url: str) -> AsyncIterator[AsyncEngine]:
     """An owner engine on the migrated database; tables are emptied after each test."""
-    test_engine = create_async_engine(migrated_database_url, poolclass=NullPool)
+    test_engine = create_async_engine(
+        migrated_database_url, poolclass=NullPool, hide_parameters=True
+    )
     try:
         yield test_engine
     finally:

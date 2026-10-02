@@ -119,3 +119,12 @@ def test_any_offset_instant_round_trips_to_the_same_moment(moment: datetime) -> 
     assert parsed.instant == moment
     assert parsed.instant is not None
     assert parsed.instant.tzinfo is UTC
+
+
+def test_errors_and_reprs_never_echo_the_clinical_time() -> None:
+    with pytest.raises(ClinicalTimeError) as raised:
+        parse_fhir_datetime("1970-13-01")
+    parsed = parse_fhir_datetime("1970-01-01")
+
+    assert "1970" not in str(raised.value)
+    assert "1970" not in repr(parsed)
