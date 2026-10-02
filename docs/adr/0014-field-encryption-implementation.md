@@ -23,7 +23,7 @@ Status: Accepted. Implements [0008](0008-field-level-encryption.md) and settles 
   - Names are split into letter runs, folded to NFKC lower case and stripped of digits, so Synthea's `Abe604` and a typed `abe` meet.
   - Lookup is exact: every token of a search name must be present, there is no prefix or fuzzy matching, and a different blind-index key finds nothing.
   - The application role may insert and delete index rows (they are rebuilt when demographics change) and may not update them.
-- **What is sealed in the patient row.** Given names (space-joined), family name, ISO birth date and identifiers (a JSON list of system and value pairs). `sex_at_birth` stays plaintext, as 0008 decided. A patient is inserted with empty encrypted fields first, because a data key refers to the patient row, and the fields are sealed in the same transaction.
+- **What is sealed in the patient row.** Given names (a JSON list, so a name with a space survives), family name, ISO birth date and identifiers (a JSON list of system and value pairs). `sex_at_birth` stays plaintext, as 0008 decided. A patient is inserted with empty encrypted fields first, because a data key refers to the patient row, and the fields are sealed in the same transaction.
 - **One production sealer.** `FieldSealer` implements `PayloadSealer`. The stand-in sealer used in Phase 1 tests is not constructed in application code, and a test fails if production code mentions it.
 
 ## Not built yet

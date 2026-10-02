@@ -160,6 +160,29 @@ async def test_an_identity_round_trips_through_the_database(
         assert await read_identity(session, patient_id, crypto.sealer) == ABE
 
 
+@pytest.mark.parametrize(
+    "given_names",
+    [
+        pytest.param(("Mary Ann",), id="one given name with a space"),
+        pytest.param(("Mary Ann", "Lou"), id="several, one with a space"),
+        pytest.param(("Zoë", "O'Neil"), id="accents and an apostrophe"),
+        pytest.param((), id="none"),
+    ],
+)
+async def test_given_names_round_trip_exactly_and_are_still_findable(
+    engine: AsyncEngine, crypto: Crypto, given_names: tuple[str, ...]
+) -> None:
+    identity = PatientIdentity(given_names, "Ostrander", date(1990, 2, 3))
+    patient_id = await _create(engine, crypto, identity)
+
+    async with _session(engine) as session:
+        assert await read_identity(session, patient_id, crypto.sealer) == identity
+        if given_names:
+            first_token = crypto.indexer.name_tokens([given_names[0]]).pop()
+            assert first_token  # the name has letters, so it has an index entry
+            assert await find_patients(session, crypto.indexer, name=given_names[0]) == [patient_id]
+
+
 async def test_the_encrypted_columns_hold_ciphertext_and_no_plaintext(
     engine: AsyncEngine, crypto: Crypto
 ) -> None:
