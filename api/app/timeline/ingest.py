@@ -42,7 +42,8 @@ class SealContext:
     """Where a ciphertext will live, and whose key seals it.
 
     Sealers bind table, column and row id as associated data. ``patient_id`` selects the
-    patient's data key, so destroying that key shreds the patient's data; ``None`` marks a
+    patient's data key, so destroying that key makes the patient's sealed fields unreadable
+    (plaintext columns and the source link remain, ADR 0008); ``None`` marks a
     record with no patient subject (a practitioner, an organization), sealed under the
     system key class described in ADR 0008.
     """

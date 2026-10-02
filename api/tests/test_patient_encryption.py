@@ -223,11 +223,28 @@ async def test_a_destroyed_patient_key_makes_that_patients_data_unreadable(
     writer = _crypto(*secrets)
     abe = await _create(engine, writer, ABE)
     bea = await _create(engine, writer, BEA)
+    async with _session(engine) as session:
+        assert await find_patients(session, writer.indexer, name="Abe") == [abe]
 
     async with _session(engine, as_app=False) as session:
         assert await destroy_patient_key(session, abe) is True
     async with _session(engine, as_app=False) as session:
         assert await destroy_patient_key(session, abe) is False
+
+    async with _session(engine) as session:
+        for criteria in (
+            {"name": "Abe"},
+            {"birth_date": ABE.birth_date},
+            {"identifier": MRN},
+        ):
+            assert await find_patients(session, writer.indexer, **criteria) == []
+        assert await find_patients(session, writer.indexer, name="Bea") == [bea]
+        remaining = await session.scalar(
+            select(func.count())
+            .select_from(PatientBlindIndex)
+            .where(PatientBlindIndex.patient_id == abe)
+        )
+    assert remaining == 0
 
     restarted = _crypto(*secrets)  # a new process: only the KEK, no keys in memory
     async with _session(engine) as session:
