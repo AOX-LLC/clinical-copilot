@@ -18,7 +18,7 @@ flowchart LR
         db[("postgres + pgvector<br/>:4602")]
         fhir[("fhir<br/>fhir-candle, FHIR R4 · :4603<br/>stand-in EHR, in memory")]
     end
-    healthie[("Healthie GraphQL<br/>(adapter stub until sandbox access)")]
+    healthie[("Healthie GraphQL<br/>(adapter built from the public schema; never run live)")]
     labs[/"Simulated lab feed<br/>signed webhooks (Phase 3)"/]
     model[/"Model provider via the shared<br/>agent library (Phase 4)"/]
 
@@ -167,13 +167,17 @@ A check constraint ties each precision to its column. Ordering and display use o
 
 Every source system sits behind one interface (`api/app/ehr/ports.py`). It lists patients, fetches records changed since a time, fetches an exact record version to re-resolve a citation, writes back an approved summary idempotently, and verifies signed change notifications.
 
-Adapters do transport and identity only; normalizers turn records into timeline rows. A single contract suite (`api/tests/contracts/`) holds every adapter to the same behavior. It runs against the in-memory fake and against the FHIR R4 adapter over recorded responses, and, under the `live` marker, against the running stack. The Healthie adapter joins it next. See [ADR 0005](adr/0005-ehr-adapter-contract.md).
+Adapters do transport and identity only; normalizers turn records into timeline rows. A single contract suite (`api/tests/contracts/`) holds every adapter to the same behavior. It runs against the in-memory fake, against the FHIR R4 adapter over recorded responses, against the Healthie adapter over hand-built synthetic fixtures, and, under the `live` marker, against the running stack. See [ADR 0005](adr/0005-ehr-adapter-contract.md).
 
 The FHIR R4 adapter declares what the local server cannot do: no exact-version reads, no reliable "changed after" query, no write-back and no notifications. A listing reads the full result once and serves its pages from a short-lived snapshot. See [ADR 0013](adr/0013-fhir-seeding-and-adapter-limits.md).
+
+The Healthie adapter (`api/app/ehr/healthie.py`) reads patients, medications and care plans over GraphQL at a pinned API version, verifies Healthie's signed webhooks and writes an approved summary into the chart as a document when write-back is switched on. **It has never run against a live Healthie account**: its queries are validated against an excerpt of Healthie's public reference and it passes the contract suite over fixtures, nothing more. Normalizers for Healthie records and a webhook route are not built. See [ADR 0018](adr/0018-healthie-adapter.md).
 
 ## Seeding and the synthetic dataset
 
 The 28 synthetic patients come from a pinned Synthea run, trimmed to the resource types the product reads, and are committed under `data/synthea/` with the script that regenerates them (`data/synthea/generate.sh --check` confirms the committed files match a fresh run). The seed service rewrites each Synthea bundle to `PUT Type/<id>` entries, loads the shared practitioners and organizations first, then one transaction per patient. See [ADR 0012](adr/0012-synthetic-dataset.md) and [ADR 0013](adr/0013-fhir-seeding-and-adapter-limits.md).
+
+A small deterministic generator adds the practice's supplement regimens (`MedicationStatement`) and protocols (`CarePlan`) to the 17 living adult patients' bundles, pinned by a seed in the same script and covered by the same `--check`. They become the `supplement` and `protocol` timeline kinds: 73 and 22 rows. See [ADR 0016](adr/0016-practice-supplements-and-protocols.md).
 
 ## Ingest, run by run
 
@@ -192,7 +196,7 @@ flowchart TD
 - **Normalizers** are pure functions from a source record to timeline rows, one per resource type, behind a registry that takes the clinic timezone. Laboratory observations become labs, vital signs become vitals (each component its own row), and the other observation categories produce no rows. Quantities carry a UCUM unit or no number, and times keep the precision the source gave. Patient produces no rows; it feeds the patient's sealed identity.
 - **Failure stays local.** A patient whose record cannot be normalized rolls back alone; the others are ingested and the run ends `failed`.
 - **Re-runs are no-ops.** The adapter returns everything on every read ([ADR 0013](adr/0013-fhir-seeding-and-adapter-limits.md)), and ingest skips content it has seen by hash, so a run costs reading the source and about five database statements per record: 60 to 79 s for the 28 synthetic patients at concurrency 4, 133 s at concurrency 1, split about evenly between reading and writing. An ingest from empty took 106 to 115 s and was write-bound.
-- **A record deleted at the source is not noticed**, because the adapter cannot say what changed and ingest only upserts.
+- **A record deleted at the source is tombstoned** when a complete read of the patient no longer returns it: the head gets `deleted_at`, the timeline rows leave the current timeline, and nothing is deleted. A type that came back empty is never tombstoned, and a record that comes back is current again. Patients are never merged across sources on their own. See [ADR 0017](adr/0017-source-deletions-and-cross-source-patients.md).
 
 ## Field encryption
 
