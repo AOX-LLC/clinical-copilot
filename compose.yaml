@@ -1,0 +1,144 @@
+# Local development stack. Every published port is bound to 127.0.0.1 only.
+# Secrets come from .env (copy .env.example); nothing here has a default password.
+name: clinical-copilot
+
+services:
+  postgres:
+    # Image runs its own entrypoint as the postgres user (image default).
+    image: pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    pids_limit: 200
+    # Terse errors keep "Failing row contains (...)" details out of the server log.
+    command: ["postgres", "-c", "log_error_verbosity=terse"]
+    ports:
+      - "127.0.0.1:4602:5432"
+    environment:
+      POSTGRES_DB: clinical_copilot
+      POSTGRES_USER: copilot_owner
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U copilot_owner -d clinical_copilot"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    # One-shot: runs Alembic as the owner role, then exits.
+    build: ./api
+    image: clinical-copilot-api:local
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 100
+    mem_limit: 256m
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      DATABASE_URL: postgresql+asyncpg://copilot_owner:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/clinical_copilot
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: ./api
+    image: clinical-copilot-api:local
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 100
+    mem_limit: 256m
+    read_only: true
+    tmpfs:
+      - /tmp
+    ports:
+      - "127.0.0.1:4601:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://copilot_app:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}@postgres:5432/clinical_copilot
+      CLINIC_TIMEZONE: ${CLINIC_TIMEZONE:-America/New_York}
+      CLINIC_TODAY: ${CLINIC_TODAY:-}
+      MOCK_MODE: ${MOCK_MODE:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  web:
+    build: ./web
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 100
+    mem_limit: 384m
+    ports:
+      - "127.0.0.1:4600:3000"
+    environment:
+      API_INTERNAL_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  fhir:
+    # Stand-in EHR on synthetic data: fhir-candle, a small in-memory FHIR R4
+    # server (ADR 0002). Unauthenticated and loopback-only. Data lives in memory
+    # and is gone after a restart; the seed reloads it.
+    image: ghcr.io/fhir/fhir-candle@sha256:3c7f66cde51c8bfc56a03142e8fa3a9b0ded67c4329f1fd4429a0245f95c07fb
+    command: ["--r4", "r4", "--headless", "--max-resources", "200000"]
+    user: "65532:65532"
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 200
+    mem_limit: 768m
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/fhir-candle-key-store:uid=65532,gid=65532,mode=0700
+      - /.fhir:uid=65532,gid=65532,mode=0700
+    ports:
+      - "127.0.0.1:4603:5826"
+    healthcheck:
+      # The image has bash but no curl or wget.
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/5826
+          && printf 'GET /fhir/r4/metadata HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3
+          && head -1 <&3 | grep -q ' 200 '
+      interval: 15s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
+
+volumes:
+  pgdata:
