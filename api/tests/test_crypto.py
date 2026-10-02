@@ -7,6 +7,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from app.crypto import cipher
 from app.crypto.blind_index import BlindIndexer, IndexKind
@@ -152,6 +153,21 @@ def test_an_altered_value_does_not_open(tamper: object) -> None:
 
     with pytest.raises(DecryptionError):
         sealer.open(tamper(sealed), _context())  # type: ignore[operator]
+
+
+def test_the_version_byte_is_part_of_what_the_tag_authenticates() -> None:
+    key = generate_data_key()
+    associated_data = cipher.field_associated_data("patient", "family_name_enc", ROW_ONE)
+    nonce = os.urandom(cipher.NONCE_BYTES)
+    # The same layout as a sealed value, but authenticated without the version byte.
+    unbound = (
+        bytes([cipher.DATA_KEY_VERSION]) + nonce + AESGCM(key).encrypt(nonce, b"x", associated_data)
+    )
+    bound = cipher.seal(key, b"x", associated_data)
+
+    assert cipher.open_sealed(key, bound, associated_data) == b"x"
+    with pytest.raises(DecryptionError):
+        cipher.open_sealed(key, unbound, associated_data)
 
 
 def test_an_unknown_version_byte_or_a_short_value_does_not_open() -> None:
