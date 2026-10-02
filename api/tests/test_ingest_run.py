@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from app.crypto.keystore import destroy_patient_key
 from app.crypto.runtime import FieldCrypto
 from app.ingest import run as ingest_run
 from app.ingest.__main__ import main
@@ -332,3 +333,30 @@ async def test_a_record_that_does_not_name_its_patient_is_never_ingested(
         )
         == 0
     )
+
+
+async def test_a_patient_whose_key_was_destroyed_is_skipped_not_recreated(
+    migrated_database_url: str, engine: AsyncEngine
+) -> None:
+    material = new_key_material()
+    transport = DatasetFhirTransport(patient_limit=SLICE)
+    first = await _ingest(migrated_database_url, real_crypto(material), transport)
+    erased = await _scalar(
+        engine,
+        "SELECT patient_id FROM patient_source_link WHERE external_id = :id",
+        id=FIRST_PATIENT[1],
+    )
+    async with AsyncSession(engine) as session, session.begin():
+        assert await destroy_patient_key(session, erased) is True
+    before = await table_digests(engine)
+
+    # A new process: it holds no keys but the material, and the source still lists the patient.
+    second = await _ingest(migrated_database_url, real_crypto(material), transport)
+
+    assert first.succeeded
+    assert second.status is ImportStatus.SUCCEEDED
+    assert second.failures == []
+    assert (second.patients, second.patients_skipped) == (SLICE - 1, 1)
+    assert second.snapshots_created == 0
+    assert await _scalar(engine, "SELECT count(*) FROM patient") == SLICE
+    assert await table_digests(engine) == before

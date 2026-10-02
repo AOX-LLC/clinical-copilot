@@ -13,5 +13,9 @@ class KeyUnavailableError(CryptoError):
     """The data key for an owner is not loaded, was destroyed, or cannot be unwrapped."""
 
 
+class KeyDestroyedError(KeyUnavailableError):
+    """The patient's data key was destroyed on purpose; their sealed data is gone for good."""
+
+
 class KeyMaterialError(CryptoError):
     """The key-encryption key or the blind-index key is missing or malformed."""

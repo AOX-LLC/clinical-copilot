@@ -30,7 +30,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from app.crypto.errors import CryptoError
+from app.crypto.errors import CryptoError, KeyDestroyedError
 from app.crypto.runtime import FieldCrypto
 from app.ehr.ports import (
     EhrAdapter,
@@ -78,6 +78,7 @@ class UnknownSourceError(Exception):
 
 @dataclass(slots=True)
 class PatientResult:
+    skipped: bool = False
     created: bool = False
     records: Counter[str] = field(default_factory=Counter)
     snapshots_created: int = 0
@@ -90,6 +91,7 @@ class IngestSummary:
     status: ImportStatus
     patients: int = 0
     patients_created: int = 0
+    patients_skipped: int = 0
     records_seen: int = 0
     snapshots_created: int = 0
     heads_moved: int = 0
@@ -185,6 +187,9 @@ async def _record_outcome(
         logger.error("patient %s failed: %s", patient.external_id, type(error).__name__)
         summary.failures.append(type(error).__name__)
         return
+    if result.skipped:
+        summary.patients_skipped += 1
+        return
     summary.patients += 1
     summary.patients_created += result.created
     summary.records_seen += sum(result.records.values())
@@ -214,15 +219,22 @@ class _PatientIngest:
         identity = identity_from_fhir_patient(parse_resource(patient.record.payload, label), label)
 
         async with AsyncSession(self.engine) as session, session.begin():
-            patient_id, result.created = await resolve_source_patient(
-                session,
-                self.source_system_id,
-                patient.external_id,
-                identity,
-                self.crypto.keystore,
-                self.crypto.sealer,
-                self.crypto.indexer,
-            )
+            try:
+                patient_id, result.created = await resolve_source_patient(
+                    session,
+                    self.source_system_id,
+                    patient.external_id,
+                    identity,
+                    self.crypto.keystore,
+                    self.crypto.sealer,
+                    self.crypto.indexer,
+                )
+            except KeyDestroyedError:
+                # Erased on purpose (ADR 0014): the source still lists them, and ingesting
+                # them again would recreate what was destroyed. Not a failure of the run.
+                result.skipped = True
+                logger.warning("patient %s skipped: their key was destroyed", patient.external_id)
+                return result
             context = IngestContext(
                 source_system_id=self.source_system_id,
                 projector=projector,
