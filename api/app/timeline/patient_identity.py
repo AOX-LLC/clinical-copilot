@@ -69,7 +69,7 @@ async def replace_identity(
     def seal(column: str, text: str | None) -> bytes | None:
         if text is None:
             return None
-        context = SealContext(TABLE, column, patient_id, patient_id)
+        context = _context(column, patient_id)
         return sealer.seal(text.encode("utf-8"), context)
 
     pairs = [[item.system, item.value] for item in identity.identifiers]
@@ -112,9 +112,7 @@ async def read_identity(
     def open_column(column: str, sealed: bytes | None) -> str | None:
         if sealed is None:
             return None
-        return sealer.open(sealed, SealContext(TABLE, column, patient_id, patient_id)).decode(
-            "utf-8"
-        )
+        return sealer.open(sealed, _context(column, patient_id)).decode("utf-8")
 
     given = open_column("given_name_enc", row.given_name_enc)
     birth = open_column("birth_date_enc", row.birth_date_enc)
@@ -159,6 +157,11 @@ async def find_patients(
         .order_by(PatientBlindIndex.patient_id)
     )
     return list(matched)
+
+
+def _context(column: str, patient_id: uuid.UUID) -> SealContext:
+    """Where a patient's value lives: their own row, sealed under their own key."""
+    return SealContext(table=TABLE, column=column, row_id=patient_id, patient_id=patient_id)
 
 
 def _digests(identity: PatientIdentity, indexer: BlindIndexer) -> set[tuple[str, bytes]]:
