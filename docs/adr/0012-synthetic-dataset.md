@@ -10,7 +10,7 @@ Two ways to supply the data:
 - **Generate once into a cached volume.** The repository stays small, but the first `up` needs a 201 MB jar, a JRE image and a run of the generator.
 
 ## Measurements (2026-10-02)
-Synthea v4.0.0, seed 20260901, reference date 2026-09-01, five years of history, FHIR R4 export only, in a container with no network.
+The jar published as the Synthea v4.0.0 release (SHA-256 `ed43c20a…6ecc1`, which matches the digest GitHub lists for that asset), seed 20260901, reference date 2026-09-01, five years of history, FHIR R4 export only, in a container with no network.
 
 | Measure | Result |
 | --- | --- |
@@ -21,6 +21,8 @@ Synthea v4.0.0, seed 20260901, reference date 2026-09-01, five years of history,
 | Share of raw output that is claims (`ExplanationOfBenefit`, `Claim`) | 19.5 MB of 46.6 MB of resources, for `-p 25` |
 | After trimming, `-p 20` | 13,994 resources, 16.3 MB of JSON, 1.4 MB committed as gzip |
 | Reproducibility | two runs gave byte-identical patient files; only the two shared-bundle file names carry a timestamp, and their contents match |
+
+One thing a reader may trip over: that jar's own manifest says `Build-Version: v3.4.0-18-ga07a65555`, and the same string is in every generated patient narrative. The release tag and the build's `git describe` disagree; the checksum, not either label, is what pins the generator.
 
 ## Decision
 - **Commit the trimmed dataset** under `data/synthea/`. The rule was: commit if the committed size is at most 10 MB or generation is not reproducible. Both pointed the same way, with 1.4 MB committed.
