@@ -23,7 +23,7 @@
 ## Commands
 ```bash
 cp .env.example .env              # then set the two passwords and the two keys
-docker compose up -d --wait       # whole stack
+docker compose up -d --build --wait   # whole stack; a plain `up` reuses an old API image after code changes
 docker compose down
 docker compose run --rm seed      # reload the dataset after the fhir service restarts
 docker compose run --rm ingest    # read the FHIR server into the timeline again (idempotent)
