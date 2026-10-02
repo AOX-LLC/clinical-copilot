@@ -107,6 +107,9 @@ jobs:
           curl -fsS http://127.0.0.1:4601/readyz
           curl -fsS http://127.0.0.1:4600/healthz
           curl -fsS -o /dev/null http://127.0.0.1:4603/fhir/r4/metadata
+          # The seed service runs before the API starts: the 28 synthetic patients must be there.
+          patients="$(curl -fsS 'http://127.0.0.1:4603/fhir/r4/Patient?_summary=count' | python3 -c 'import json,sys; print(json.load(sys.stdin)["total"])')"
+          test "$patients" = 28
       - name: Show logs on failure
         if: failure()
         run: docker compose logs
