@@ -245,6 +245,9 @@ class SourceResourceHead(Base):
     source_record_id: Mapped[uuid.UUID] = mapped_column(index=True)
     last_seen_at: Mapped[datetime]
     changed_at: Mapped[datetime]
+    # When a full sync first found the record missing from the source; cleared when it is seen
+    # again. The snapshots stay: they are history (ADR 0017).
+    deleted_at: Mapped[datetime | None]
 
 
 class TimelineEvent(Base):

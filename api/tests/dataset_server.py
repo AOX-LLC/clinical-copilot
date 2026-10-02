@@ -7,7 +7,7 @@ server stamps every resource with ``meta`` (version 1, a last-updated time), and
 """
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from datetime import UTC, datetime
 from functools import cache
 from typing import Any
@@ -39,7 +39,12 @@ class DatasetFhirTransport(httpx.AsyncBaseTransport):
         stamped_at: datetime = datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
         patient_limit: int | None = None,
         mutations: Mapping[tuple[str, str], Mutation] | None = None,
+        omit: Collection[tuple[str, str]] = (),
+        failing_types: Collection[str] = (),
     ) -> None:
+        # ``omit`` leaves records out, as a source does after they are deleted there;
+        # ``failing_types`` makes the search for a type answer with a server error.
+        self._failing_types = frozenset(failing_types)
         self._patients: list[bytes] = []
         self._by_key: dict[tuple[str, str], bytes] = {}
         self._by_patient: dict[tuple[str, str], list[bytes]] = {}
@@ -48,6 +53,8 @@ class DatasetFhirTransport(httpx.AsyncBaseTransport):
         meta = {"versionId": "1", "lastUpdated": stamped_at.isoformat()}
         for resources in _stored_resources()[:patient_limit]:
             for stored in resources:
+                if (stored["resourceType"], stored["id"]) in omit:
+                    continue
                 resource = json.loads(json.dumps(stored))
                 # A server finds a record by what it was stored under; a mutation changes what
                 # it says, so it can serve a record that names a different patient.
@@ -75,6 +82,8 @@ class DatasetFhirTransport(httpx.AsyncBaseTransport):
             return _ok(body) if body is not None else httpx.Response(404, json={})
         if parts[0] == "Patient":
             return _ok(_bundle(self._patients))
+        if parts[0] in self._failing_types:
+            return httpx.Response(500, json={})
         patient = request.url.params.get("patient", "")
         return _ok(_bundle(self._by_patient.get((parts[0], patient), [])))
 

@@ -6,6 +6,11 @@ that reverts (A, then B, then A again) makes A current again even though A's sna
 already existed. When the head moves, the previous snapshot's timeline rows are
 superseded and the new head's rows are projected (or revived) in the same transaction.
 
+A record that disappears from the source is tombstoned by ``tombstone_unseen``, only after a
+full sync of the patient read to the end. Its head gets ``deleted_at``, its timeline rows are
+superseded, and nothing is deleted: seeing the record again clears the tombstone and brings
+its rows back.
+
 Callers own the transaction: run ``ingest_snapshot`` inside ``session.begin()``.
 """
 
@@ -103,6 +108,7 @@ class IngestOutcome:
     source_record_id: uuid.UUID
     snapshot_created: bool
     head_moved: bool
+    revived: bool = False  # the record had been tombstoned and was seen again
 
 
 async def ingest_snapshot(
@@ -111,17 +117,18 @@ async def ingest_snapshot(
     _verify_content_hash(record)
     try:
         snapshot_id, snapshot_created = await _store_snapshot(session, record, context, now)
-        previous_head = await _move_head(session, record, context, snapshot_id, now)
+        previous_head, revived = await _move_head(session, record, context, snapshot_id, now)
 
         head_moved = previous_head != snapshot_id
         if head_moved:
             await _supersede_rows_of(session, previous_head, now)
+        if head_moved or revived:
             await _project(session, record, snapshot_id, context, now)
     except DBAPIError as error:
         raise IngestError(
             f"database rejected {record.resource_type}/{record.resource_id}: {_describe(error)}"
         ) from None  # the driver's error carries "Failing row contains (...)" with row values
-    return IngestOutcome(snapshot_id, snapshot_created, head_moved)
+    return IngestOutcome(snapshot_id, snapshot_created, head_moved, revived)
 
 
 def _describe(error: DBAPIError) -> str:
@@ -197,8 +204,9 @@ async def _move_head(
     context: IngestContext,
     snapshot_id: uuid.UUID,
     now: datetime,
-) -> uuid.UUID | None:
-    """Point the head at ``snapshot_id`` and return the snapshot it pointed at before."""
+) -> tuple[uuid.UUID | None, bool]:
+    """Point the head at ``snapshot_id``; return where it pointed before and whether it was
+    tombstoned (a sighting clears the tombstone)."""
     head_key = (
         SourceResourceHead.source_system_id == context.source_system_id,
         SourceResourceHead.resource_type == record.resource_type,
@@ -218,16 +226,24 @@ async def _move_head(
         .returning(SourceResourceHead.source_record_id)
     )
     if first_sighting is not None:
-        return None
+        return None, False
 
-    previous = await session.scalar(
-        select(SourceResourceHead.source_record_id).where(*head_key).with_for_update()
-    )
-    head_changes: dict[str, Any] = {"source_record_id": snapshot_id, "last_seen_at": now}
+    previous, deleted_at = (
+        await session.execute(
+            select(SourceResourceHead.source_record_id, SourceResourceHead.deleted_at)
+            .where(*head_key)
+            .with_for_update()
+        )
+    ).one()
+    head_changes: dict[str, Any] = {
+        "source_record_id": snapshot_id,
+        "last_seen_at": now,
+        "deleted_at": None,
+    }
     if previous != snapshot_id:
         head_changes["changed_at"] = now
     await session.execute(update(SourceResourceHead).where(*head_key).values(**head_changes))
-    return previous
+    return previous, deleted_at is not None
 
 
 async def _supersede_rows_of(
@@ -329,3 +345,53 @@ def _timeline_row(
         "detail_enc": seal("detail_enc", draft.detail_json),
         "projected_at": now,
     }
+
+
+async def tombstone_unseen(
+    session: AsyncSession,
+    source_system_id: int,
+    patient_id: uuid.UUID,
+    seen: set[tuple[str, str]],
+    now: datetime,
+) -> int:
+    """Tombstone the patient's records that a complete read of the source no longer returned.
+
+    ``seen`` is every ``(resource_type, resource_id)`` the source returned for this patient,
+    and the caller may pass it only when the whole listing was read to its end. Only types the
+    listing returned at least one record of are considered: a type that came back empty is
+    more likely an outage or a wiped source than a patient whose every record was deleted, and
+    erasing a chart's history on that guess is the costlier mistake. Nothing is deleted; a
+    record that comes back clears its tombstone. Returns how many records were tombstoned.
+    """
+    seen_types = {resource_type for resource_type, _ in seen}
+    if not seen_types:
+        return 0
+    current = (
+        await session.execute(
+            select(
+                SourceResourceHead.resource_type,
+                SourceResourceHead.resource_id,
+                SourceResourceHead.source_record_id,
+            )
+            .join(StoredSourceRecord, StoredSourceRecord.id == SourceResourceHead.source_record_id)
+            .where(
+                SourceResourceHead.source_system_id == source_system_id,
+                StoredSourceRecord.patient_id == patient_id,
+                SourceResourceHead.resource_type.in_(seen_types),
+                SourceResourceHead.deleted_at.is_(None),
+            )
+        )
+    ).all()
+    gone = [row for row in current if (row.resource_type, row.resource_id) not in seen]
+    for row in gone:
+        await session.execute(
+            update(SourceResourceHead)
+            .where(
+                SourceResourceHead.source_system_id == source_system_id,
+                SourceResourceHead.resource_type == row.resource_type,
+                SourceResourceHead.resource_id == row.resource_id,
+            )
+            .values(deleted_at=now)
+        )
+        await _supersede_rows_of(session, row.source_record_id, now)
+    return len(gone)
