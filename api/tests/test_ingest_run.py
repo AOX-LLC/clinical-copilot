@@ -1,5 +1,7 @@
 """Ingest behaviour on a three-patient slice of the dataset, as the application role."""
 
+import base64
+import os
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -14,11 +16,22 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.crypto.keystore import destroy_patient_key
 from app.crypto.runtime import FieldCrypto
+from app.ehr.ports import (
+    PermanentSourceError,
+    RateLimitedError,
+    RetryableSourceError,
+    SourceSystemRef,
+)
 from app.ingest import run as ingest_run
 from app.ingest.__main__ import main
-from app.ingest.run import ADVISORY_LOCK_KEY, IngestBusyError, run_ingest
+from app.ingest.run import (
+    ADVISORY_LOCK_KEY,
+    IngestBusyError,
+    UnknownSourceError,
+    run_ingest,
+)
 from app.timeline.patient_identity import find_patients, read_identity
-from app.timeline.vocabulary import ImportStatus
+from app.timeline.vocabulary import ImportStatus, SourceKind
 from tests.dataset_server import DatasetFhirTransport
 from tests.ingest_support import (
     adapter_over,
@@ -395,3 +408,120 @@ async def test_a_run_killed_before_it_finished_is_closed_by_the_next_one(
         ("failed", "abandoned", True),
         ("succeeded", None, True),
     ]
+
+
+class _Flaky:
+    """Fails a call a set number of times, then answers."""
+
+    def __init__(self, failures: list[Exception]) -> None:
+        self.failures = failures
+        self.calls = 0
+
+    async def __call__(self) -> str:
+        self.calls += 1
+        if self.failures:
+            raise self.failures.pop(0)
+        return "ok"
+
+
+@pytest.fixture
+def waits(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    recorded: list[float] = []
+
+    async def record(seconds: float) -> None:
+        recorded.append(seconds)
+
+    monkeypatch.setattr(ingest_run, "_sleep", record)
+    return recorded
+
+
+async def test_a_throttled_read_waits_as_long_as_the_source_asked(waits: list[float]) -> None:
+    flaky = _Flaky([RateLimitedError("slow down", 7.0)])
+
+    assert await ingest_run._retrying(flaky) == "ok"
+    assert (flaky.calls, waits) == (2, [7.0])
+
+
+async def test_an_expired_listing_is_read_again_with_growing_waits(waits: list[float]) -> None:
+    flaky = _Flaky([RetryableSourceError("expired"), RetryableSourceError("expired")])
+
+    assert await ingest_run._retrying(flaky) == "ok"
+    assert (flaky.calls, waits) == (3, [2.0, 4.0])
+
+
+async def test_a_read_that_keeps_failing_gives_up_after_three_attempts(
+    waits: list[float],
+) -> None:
+    flaky = _Flaky([RetryableSourceError("down")] * 5)
+
+    with pytest.raises(RetryableSourceError):
+        await ingest_run._retrying(flaky)
+
+    assert (flaky.calls, len(waits)) == (3, 2)
+
+
+async def test_a_permanent_error_is_not_retried(waits: list[float]) -> None:
+    flaky = _Flaky([PermanentSourceError("no")])
+
+    with pytest.raises(PermanentSourceError):
+        await ingest_run._retrying(flaky)
+
+    assert (flaky.calls, waits) == (1, [])
+
+
+async def test_a_source_system_that_is_not_registered_is_refused_before_any_run(
+    migrated_database_url: str, engine: AsyncEngine
+) -> None:
+    adapter, client = adapter_over(DatasetFhirTransport(patient_limit=1))
+    unregistered = SourceSystemRef("not-registered", SourceKind.FHIR_R4)
+    adapter._source = unregistered
+    try:
+        async with app_role_engine(migrated_database_url) as app_engine:
+            with pytest.raises(UnknownSourceError):
+                await run_ingest(app_engine, adapter, real_crypto(new_key_material()), CLINIC_ZONE)
+    finally:
+        await client.aclose()
+
+    assert await _scalar(engine, "SELECT count(*) FROM import_run") == 0
+
+
+async def test_a_listing_that_fails_once_does_not_abort_the_run(
+    migrated_database_url: str, waits: list[float]
+) -> None:
+    class FlakyListing:
+        def __init__(self, inner: Any) -> None:
+            self._inner = inner
+            self.failed = False
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+        async def list_patients(self, cursor: str | None, page_size: int) -> Any:
+            if not self.failed:
+                self.failed = True
+                raise RetryableSourceError("transport error")
+            return await self._inner.list_patients(cursor, page_size)
+
+    inner, client = adapter_over(DatasetFhirTransport(patient_limit=1))
+    try:
+        async with app_role_engine(migrated_database_url) as app_engine:
+            summary = await run_ingest(
+                app_engine, FlakyListing(inner), real_crypto(new_key_material()), CLINIC_ZONE
+            )
+    finally:
+        await client.aclose()
+
+    assert summary.succeeded
+    assert waits == [2.0]
+
+
+@pytest.mark.parametrize("value", ["0", "5", "-1", "four", "2.5"])
+def test_the_command_refuses_an_unusable_concurrency(
+    monkeypatch: pytest.MonkeyPatch, migrated_database_url: str, value: str
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", migrated_database_url)
+    monkeypatch.setenv("INGEST_CONCURRENCY", value)
+    monkeypatch.setenv("FIELD_KEK", base64.b64encode(os.urandom(32)).decode())
+    monkeypatch.setenv("BLIND_INDEX_KEY", base64.b64encode(os.urandom(32)).decode())
+
+    assert main() == 1

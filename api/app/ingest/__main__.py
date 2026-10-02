@@ -21,7 +21,7 @@ from app.crypto.keys import load_key_material
 from app.crypto.runtime import build_field_crypto
 from app.db import create_engine
 from app.ehr.fhir_r4 import FhirR4Adapter
-from app.ehr.ports import SourceSystemRef
+from app.ehr.ports import EhrAdapterError, SourceSystemRef
 from app.ingest.run import (
     MAX_CONCURRENCY,
     IngestBusyError,
@@ -38,12 +38,22 @@ REQUEST_TIMEOUT_SECONDS = 120.0
 logger = logging.getLogger("app.ingest")
 
 
+class ConfigError(Exception):
+    """A setting is missing or out of range."""
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)  # it logs every request URL at INFO
     try:
         summary = asyncio.run(_run())
-    except (CryptoError, IngestBusyError, UnknownSourceError) as error:
+    except (
+        CryptoError,
+        EhrAdapterError,
+        ConfigError,
+        IngestBusyError,
+        UnknownSourceError,
+    ) as error:
         logger.error("%s", error)
         return 1
     _report(summary)
@@ -53,7 +63,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 async def _run() -> IngestSummary:
     settings = Settings()
     crypto = build_field_crypto(load_key_material(os.environ))
-    concurrency = int(os.environ.get("INGEST_CONCURRENCY", MAX_CONCURRENCY))
+    concurrency = _concurrency(os.environ.get("INGEST_CONCURRENCY"))
     base_url = os.environ.get("FHIR_BASE_URL", DEFAULT_FHIR_BASE_URL)
     engine = create_engine(settings.database_url.get_secret_value())
     try:
@@ -62,6 +72,14 @@ async def _run() -> IngestSummary:
             return await run_ingest(engine, adapter, crypto, settings.clinic_zone, concurrency)
     finally:
         await engine.dispose()
+
+
+def _concurrency(raw: str | None) -> int:
+    if raw is None or raw == "":
+        return MAX_CONCURRENCY
+    if not raw.isdecimal() or not 1 <= int(raw) <= MAX_CONCURRENCY:
+        raise ConfigError(f"INGEST_CONCURRENCY must be a whole number from 1 to {MAX_CONCURRENCY}")
+    return int(raw)
 
 
 def _report(summary: IngestSummary) -> None:
