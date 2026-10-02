@@ -9,6 +9,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from app.ehr import _wire as wire
 from app.ehr import fhir_r4
 from app.ehr.fhir_r4 import FhirR4Adapter
 from app.ehr.ports import (
@@ -153,7 +154,7 @@ async def test_failures_map_to_typed_errors(
         pytest.param({"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}, None, id="a date"),
         pytest.param({"Retry-After": "inf"}, None, id="infinite"),
         pytest.param({"Retry-After": "nan"}, None, id="not a number"),
-        pytest.param({"Retry-After": "1e9"}, fhir_r4.MAX_RETRY_AFTER_SECONDS, id="absurdly long"),
+        pytest.param({"Retry-After": "1e9"}, wire.MAX_RETRY_AFTER_SECONDS, id="absurdly long"),
         pytest.param({"Retry-After": "-5"}, 0.0, id="negative"),
     ],
 )
