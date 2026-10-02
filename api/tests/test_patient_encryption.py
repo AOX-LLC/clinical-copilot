@@ -613,6 +613,22 @@ async def test_two_source_patients_with_the_same_identity_are_not_merged(
     assert first != second
 
 
+async def _wait_until_a_backend_waits_on_a_lock(engine: AsyncEngine) -> None:
+    """Block until some connection is waiting on a lock, instead of guessing how long that takes."""
+    for _ in range(100):
+        async with engine.connect() as connection:
+            waiting = await connection.scalar(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity"
+                    " WHERE datname = current_database() AND wait_event_type = 'Lock'"
+                )
+            )
+        if waiting:
+            return
+        await asyncio.sleep(0.1)
+    pytest.fail("no connection ever waited on the link's primary key")
+
+
 async def test_a_lost_link_race_rolls_the_duplicate_patient_back(
     engine: AsyncEngine, secrets: tuple[bytes, bytes]
 ) -> None:
@@ -625,7 +641,7 @@ async def test_a_lost_link_race_rolls_the_duplicate_patient_back(
         # The second run cannot see the uncommitted link, creates its own patient, and
         # waits on the link's primary key until the first run commits.
         loser = asyncio.create_task(_resolve(engine, _crypto(*secrets), "ext-1", ABE))
-        await asyncio.sleep(0.5)
+        await _wait_until_a_backend_waits_on_a_lock(engine)
         assert not loser.done()
 
     with pytest.raises(LinkRaceError):

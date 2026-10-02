@@ -627,3 +627,27 @@ def test_a_full_birth_date_is_read_as_that_calendar_date() -> None:
     resource["birthDate"] = "1980-05-17"
 
     assert identity_from_fhir_patient(resource, "Patient/x").birth_date == date(1980, 5, 17)
+
+
+def test_a_row_with_no_clinical_time_is_placed_by_when_it_was_recorded() -> None:
+    resource = dataset_resource("Immunization", IMMUNIZATION)
+    del resource["occurrenceDateTime"]
+    resource["occurrenceString"] = "last winter"
+    resource["recorded"] = "2022-09-01T12:00:00+00:00"
+
+    (row,) = project_resource(resource)
+
+    assert row.occurred is None
+    assert row.sort_at == datetime(2022, 9, 1, 12, 0, tzinfo=UTC)
+
+
+def test_a_row_with_no_time_at_all_is_placed_by_when_the_source_updated_it() -> None:
+    resource = dataset_resource("Encounter", ENCOUNTER)
+    del resource["period"]
+    updated = datetime(2026, 9, 1, 8, 30, tzinfo=UTC)
+    record = dataclasses.replace(record_of(resource), source_updated_at=updated)
+
+    (row,) = PROJECT(record)
+
+    assert row.occurred is None
+    assert row.sort_at == updated
