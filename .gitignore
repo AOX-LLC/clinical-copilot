@@ -1,0 +1,38 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Session worktrees and local-only session rules
+.worktrees/
+CLAUDE.local.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+.next/
+out/
+coverage/
+
+# Local data and model artifacts
+data/local/
+*.sqlite3
+*.db
+*.pt
+*.onnx
+
+# OS and editors
+.DS_Store
+.idea/
+.vscode/
