@@ -588,6 +588,38 @@ async def test_a_source_patient_is_created_once_and_found_by_its_link(
         assert await session.scalar(select(func.count()).select_from(Patient)) == 1
 
 
+async def test_the_same_person_from_a_second_source_is_a_second_patient(
+    engine: AsyncEngine, crypto: Crypto
+) -> None:
+    # Source 1 is the local FHIR server and source 2 is Healthie. Identical identities and even
+    # identical external ids are never merged on their own (ADR 0017): each source's patient is
+    # found by that source's link and nothing else.
+    async with _session(engine) as session:
+        sources = {
+            code: system_id
+            for system_id, code in (
+                await session.execute(text("SELECT id, code FROM source_system"))
+            ).all()
+        }
+    fhir, healthie = sources["fhir-local"], sources["healthie"]
+
+    async def resolve(source: int, external_id: str) -> tuple[uuid.UUID, bool]:
+        async with _session(engine) as session:
+            return await resolve_source_patient(
+                session, source, external_id, ABE, crypto.keystore, crypto.sealer, crypto.indexer
+            )
+
+    from_fhir, _ = await resolve(fhir, "ext-1")
+    from_healthie, created = await resolve(healthie, "ext-1")
+    again, created_again = await resolve(healthie, "ext-1")
+
+    assert created is True
+    assert (again, created_again) == (from_healthie, False)
+    assert from_fhir != from_healthie
+    async with _session(engine) as session:
+        assert await session.scalar(select(func.count()).select_from(Patient)) == 2
+
+
 async def test_resolving_again_in_a_new_process_loads_the_existing_key(
     engine: AsyncEngine, secrets: tuple[bytes, bytes]
 ) -> None:
