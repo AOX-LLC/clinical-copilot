@@ -36,6 +36,9 @@ class AdapterHarness:
     patient_external_id: str
     throttle_next_call: Callable[[], None]
     sign_notification: Callable[[bytes], Mapping[str, str]]
+    # A distinctive value present in the source payloads that must never surface in logs,
+    # error messages or reprs.
+    payload_sentinel: str
 
 
 def _fake_harness() -> AdapterHarness:
@@ -45,6 +48,7 @@ def _fake_harness() -> AdapterHarness:
         patient_external_id="patient-1",
         throttle_next_call=adapter.throttle_next_call,
         sign_notification=adapter.sign_notification,
+        payload_sentinel=SENTINEL_FAMILY_NAME,
     )
 
 
@@ -142,6 +146,13 @@ async def test_changes_since_a_time_are_strictly_later_and_repeatable(
         record.source_updated_at for record in everything if record.source_updated_at is not None
     )
     cutoff = update_times[len(update_times) // 2]
+    if not (await harness.adapter.capabilities()).supports_since:
+        # A source that cannot answer "changed after" returns everything, every time.
+        unfiltered = await _all_changes(harness, since=cutoff)
+        assert sorted(record.content_sha256 for record in unfiltered) == sorted(
+            record.content_sha256 for record in everything
+        )
+        return
 
     first_pass = await _all_changes(harness, since=cutoff)
     second_pass = await _all_changes(harness, since=cutoff)
@@ -237,8 +248,8 @@ async def test_payload_content_never_reaches_logs_errors_or_reprs(
         surfaced_text.append(str(raised.value))
     surfaced_text.extend(record.getMessage() for record in caplog.records)
 
-    assert any(SENTINEL_FAMILY_NAME.encode() in record.payload for record in records)
-    assert not [text for text in surfaced_text if SENTINEL_FAMILY_NAME in text]
+    assert any(harness.payload_sentinel.encode() in record.payload for record in records)
+    assert not [text for text in surfaced_text if harness.payload_sentinel in text]
 
 
 async def test_a_page_size_below_one_is_refused(harness: AdapterHarness) -> None:
