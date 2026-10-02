@@ -15,3 +15,4 @@ Each record states one decision, why it was made, and what it costs. Records are
 | [0009](0009-llm-context-audit-and-minimization.md) | One context builder: minimize, audit every item, then call | Accepted |
 | [0010](0010-signed-lab-webhook.md) | HMAC-signed lab webhook with timestamp and event-id replay protection | Accepted |
 | [0011](0011-summary-citations-through-edits.md) | Citations point at snapshots; edits create revisions; approval checks staleness | Accepted |
+| [0012](0012-synthetic-dataset.md) | A pinned, trimmed Synthea dataset, committed | Accepted |
