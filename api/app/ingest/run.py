@@ -21,6 +21,7 @@ import resource
 import time
 import uuid
 from collections import Counter
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
@@ -151,7 +152,7 @@ async def _run_locked(
     try:
         # The whole list first, so the adapter's few paging snapshots are free for the
         # per-patient listings that follow.
-        patients = await _list_patients(adapter)
+        patients = await _retrying(lambda: _list_patients(adapter))
         kinds = (await adapter.capabilities()).record_kinds - {RecordKind.PATIENT}
         worker = _PatientIngest(
             engine, adapter, crypto, clinic_zone, source_system_id, run_id, kinds
@@ -297,21 +298,27 @@ async def _list_patients(adapter: EhrAdapter) -> list[SourcePatient]:
             return patients
 
 
-async def _fetch_with_retry(
-    adapter: EhrAdapter, external_id: str, kinds: frozenset[RecordKind]
-) -> list[SourceRecord]:
-    """Every record of a patient. A listing that expired or was throttled starts again."""
+_sleep = asyncio.sleep  # a name tests can replace so retries do not wait
+
+
+async def _retrying[T](call: Callable[[], Awaitable[T]]) -> T:
+    """Run a read of the source again when its listing expired or it throttled us."""
     for attempt in range(1, FETCH_ATTEMPTS + 1):
         try:
-            return await _fetch_all(adapter, external_id, kinds)
+            return await call()
         except (RetryableSourceError, RateLimitedError) as error:
             if attempt == FETCH_ATTEMPTS:
                 raise
-            delay = min(
-                getattr(error, "retry_after_seconds", None) or 2.0**attempt, MAX_BACKOFF_SECONDS
-            )
-            await asyncio.sleep(delay)
+            asked = error.retry_after_seconds if isinstance(error, RateLimitedError) else None
+            await _sleep(min(asked or 2.0**attempt, MAX_BACKOFF_SECONDS))
     raise AssertionError("unreachable")  # pragma: no cover
+
+
+async def _fetch_with_retry(
+    adapter: EhrAdapter, external_id: str, kinds: frozenset[RecordKind]
+) -> list[SourceRecord]:
+    """Every record of a patient, read again from the start if a listing expired."""
+    return await _retrying(lambda: _fetch_all(adapter, external_id, kinds))
 
 
 async def _fetch_all(
