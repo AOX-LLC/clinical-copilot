@@ -140,6 +140,7 @@ async def _run_locked(
     concurrency: int,
 ) -> IngestSummary:
     source_system_id = await _source_system_id(engine, adapter.source.code)
+    await _close_abandoned_runs(engine, source_system_id)
     run_id = await _start_run(engine, source_system_id)
     summary = IngestSummary(import_run_id=run_id, status=ImportStatus.RUNNING)
     try:
@@ -321,6 +322,25 @@ async def _source_system_id(engine: AsyncEngine, code: str) -> int:
     if found is None:
         raise UnknownSourceError(f"source system {code!r} is not registered")
     return found
+
+
+async def _close_abandoned_runs(engine: AsyncEngine, source_system_id: int) -> None:
+    """Mark runs left ``running`` by a killed process as failed.
+
+    Holding the lock proves no other run is alive, so any row still ``running`` was killed
+    (out of memory, SIGKILL) before it could finish itself.
+    """
+    async with AsyncSession(engine) as session, session.begin():
+        await session.execute(
+            update(ImportRun)
+            .where(
+                ImportRun.source_system_id == source_system_id,
+                ImportRun.status == ImportStatus.RUNNING,
+            )
+            .values(
+                status=ImportStatus.FAILED, finished_at=datetime.now(UTC), error_code="abandoned"
+            )
+        )
 
 
 async def _start_run(engine: AsyncEngine, source_system_id: int) -> uuid.UUID:
