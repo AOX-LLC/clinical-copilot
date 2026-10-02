@@ -1,5 +1,6 @@
 """Healthie adapter behavior beyond the contract suite, over hand-built synthetic fixtures."""
 
+import base64
 import hashlib
 import hmac
 import json
@@ -352,7 +353,11 @@ async def test_the_content_hash_ignores_updated_at_but_not_content() -> None:
 
 def event(event_type: str, resource_id: object = "7101") -> bytes:
     return json.dumps(
-        {"resource_id": resource_id, "resource_id_type": "Whatever", "event_type": event_type}
+        {
+            "resource_id": resource_id,
+            "resource_id_type": "User" if event_type.startswith("patient.") else "Whatever",
+            "event_type": event_type,
+        }
     ).encode()
 
 
@@ -646,3 +651,43 @@ def test_healthies_two_endpoints_are_accepted() -> None:
 def test_an_empty_api_key_is_refused() -> None:
     with pytest.raises(ValueError, match="API key"):
         HealthieConfig(PRODUCTION_ENDPOINT, "")
+
+
+async def test_an_event_we_ignore_is_ignored_whatever_its_id() -> None:
+    adapter, _ = make()
+    body = event("appointment.created", "not an id!")
+
+    assert adapter.parse_notification(signed(PATH, body), body) == []
+
+
+async def test_a_patient_event_that_names_another_record_type_is_refused() -> None:
+    adapter, _ = make()
+    body = json.dumps(
+        {"resource_id": "1", "resource_id_type": "Appointment", "event_type": "patient.updated"}
+    ).encode()
+
+    with pytest.raises(PermanentSourceError, match="does not match"):
+        adapter.parse_notification(signed(PATH, body), body)
+
+
+async def test_a_hostile_cursor_is_a_typed_error_not_a_crash() -> None:
+    adapter, fixture = make()
+    deep = base64.urlsafe_b64encode(b"[" * 200_000).decode()
+    long = base64.urlsafe_b64encode(b"x" * 100_000).decode()
+
+    for cursor in (deep, long):
+        with pytest.raises(PermanentSourceError):
+            await adapter.list_patients(cursor, 2)
+    assert fixture.requests == []
+
+
+async def test_a_response_that_cannot_be_decoded_is_a_typed_error() -> None:
+    def respond(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"Content-Encoding": "gzip"}, content=b"this is not gzip data"
+        )
+
+    adapter, _ = make(httpx.MockTransport(respond))
+
+    with pytest.raises(PermanentSourceError, match="could not be read"):
+        await adapter.list_patients(None, 2)

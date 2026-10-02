@@ -224,11 +224,22 @@ class HealthieAdapter:
         if secret is None:
             raise OperationNotSupportedError("webhook signature checking is not configured")
         self._verify_signature(secret, headers, body)
-        event = _parse_event(body)
-        resource_type = _TYPE_OF_EVENT_PREFIX.get(event.event_type.partition(".")[0])
+        event = parse_json_object(body)
+        event_type = event.get("event_type")
+        if not isinstance(event_type, str) or not event_type:
+            raise PermanentSourceError("the notification names no event")
+        resource_type = _TYPE_OF_EVENT_PREFIX.get(event_type.partition(".")[0])
         if resource_type is None:
-            return []  # an event for a resource this adapter does not read
-        return [ChangeNotification(resource_type, event.resource_id, event.event_type)]
+            return []  # an event for a resource this adapter does not read, whatever its id
+        resource_id = event.get("resource_id")
+        if not isinstance(resource_id, str) or not _ID.fullmatch(resource_id):
+            raise PermanentSourceError("the notification names no usable record id")
+        # The event reference types patient events as User. A signed event that says otherwise
+        # would make this re-read an unrelated record under that id.
+        id_type = event.get("resource_id_type")
+        if resource_type == USER and id_type is not None and id_type != "User":
+            raise PermanentSourceError("the notification's record type does not match its event")
+        return [ChangeNotification(resource_type, resource_id, event_type)]
 
     async def refetch(self, changes: list[ChangeNotification]) -> list[RefetchedRecord]:
         """Read each named record again. Repeating a notification repeats the read, nothing else."""
@@ -311,6 +322,9 @@ class HealthieAdapter:
             raise RetryableSourceError(f"{what}: the source timed out") from None
         except httpx.TransportError:
             raise RetryableSourceError(f"{what}: the source could not be reached") from None
+        except httpx.HTTPError:
+            # What is left is a response that could not be read (a corrupt compressed body).
+            raise PermanentSourceError(f"{what}: the response could not be read") from None
         document = parse_json_object(body)
         errors = document.get("errors")
         if errors:
@@ -424,12 +438,6 @@ class _Connection:
     next_after: str | None
 
 
-@dataclass(frozen=True, slots=True)
-class _Event:
-    event_type: str
-    resource_id: str
-
-
 def sign_webhook(config: HealthieConfig, body: bytes) -> dict[str, str]:
     """Headers Healthie would send for ``body``. For tests and the fixture harness."""
     if config.webhook_secret is None:
@@ -447,19 +455,6 @@ def sign_webhook(config: HealthieConfig, body: bytes) -> dict[str, str]:
     )
     signature = hmac.new(config.webhook_secret.encode(), signed.encode(), hashlib.sha256)
     return {"Content-Digest": f"SHA-256={digest}", "Signature": f"sig1={signature.hexdigest()}"}
-
-
-def _parse_event(body: bytes) -> _Event:
-    event = parse_json_object(body)
-    event_type = event.get("event_type")
-    resource_id = event.get("resource_id")
-    if isinstance(resource_id, int) and not isinstance(resource_id, bool):
-        resource_id = str(resource_id)
-    if not isinstance(event_type, str) or not event_type:
-        raise PermanentSourceError("the notification names no event")
-    if not isinstance(resource_id, str) or not _ID.fullmatch(resource_id):
-        raise PermanentSourceError("the notification names no usable record id")
-    return _Event(event_type, resource_id)
 
 
 def _check_status(response: httpx.Response, what: str) -> None:
@@ -497,9 +492,7 @@ def _as_node(value: object) -> dict[str, Any]:
 
 
 def _node_id(node: Mapping[str, Any]) -> str:
-    value = node.get("id")
-    if isinstance(value, int) and not isinstance(value, bool):
-        value = str(value)
+    value = node.get("id")  # JSON numbers arrive as ``Number``, a str, so an int id is a str here
     if not isinstance(value, str) or not _ID.fullmatch(value):
         raise PermanentSourceError("the source returned a record without a usable id")
     return value
@@ -556,10 +549,12 @@ def _encode_cursor(kind: str | None, after: str | None) -> str | None:
 def _decode_cursor(cursor: str | None) -> tuple[str | None, str | None]:
     if cursor is None:
         return None, None
+    if len(cursor) > 4 * _MAX_CURSOR_CHARS:
+        raise PermanentSourceError("cursor is not one this source issued")
     try:
         decoded = json.loads(base64.urlsafe_b64decode(cursor.encode("ascii")))
         kind, after = decoded["k"], decoded["a"]
-    except (binascii.Error, UnicodeError, ValueError, KeyError, TypeError):
+    except (binascii.Error, UnicodeError, ValueError, KeyError, TypeError, RecursionError):
         raise PermanentSourceError("cursor is not one this source issued") from None
     valid_kind = kind is None or (isinstance(kind, str) and len(kind) < 32)
     valid_after = after is None or (isinstance(after, str) and 0 < len(after) <= _MAX_CURSOR_CHARS)
