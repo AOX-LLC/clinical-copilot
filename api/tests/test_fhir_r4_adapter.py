@@ -175,6 +175,92 @@ async def test_a_dropped_connection_is_retryable_and_the_message_names_no_addres
     assert "fhir.recorded" not in str(raised.value)
 
 
+def _bundle_json(**fields: object) -> bytes:
+    document: dict[str, object] = {"resourceType": "Bundle", "type": "searchset"} | fields
+    return json.dumps(document).encode()
+
+
+def _patient(number: int) -> dict[str, object]:
+    return {"resourceType": "Patient", "id": f"p{number}"}
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        pytest.param(
+            _bundle_json(
+                total=45,
+                link=[{"relation": "next", "url": "http://x/next"}],
+                entry=[{"resource": _patient(1)}],
+            ),
+            "pages its results",
+            id="the source pages",
+        ),
+        pytest.param(
+            _bundle_json(total=3, entry=[{"resource": _patient(1)}]),
+            "incomplete",
+            id="total larger than the entries",
+        ),
+        pytest.param(
+            _bundle_json(total=0, entry=[{"resource": _patient(1)}]),
+            "incomplete",
+            id="total smaller than the entries",
+        ),
+        pytest.param(_bundle_json(total="many"), "malformed", id="total is not a number"),
+        pytest.param(
+            json.dumps({"resourceType": "OperationOutcome"}).encode(),
+            "did not return a bundle",
+            id="no bundle",
+        ),
+        pytest.param(_bundle_json(entry="oops"), "malformed", id="entry is not a list"),
+        pytest.param(_bundle_json(entry=["oops"]), "malformed", id="entry is not an object"),
+        pytest.param(_bundle_json(entry=[{"fullUrl": "x"}]), "malformed", id="no resource"),
+        pytest.param(
+            _bundle_json(entry=[{"resource": "x"}]), "malformed", id="resource not object"
+        ),
+        pytest.param(
+            _bundle_json(entry=[{"resource": {"resourceType": "Encounter", "id": "e1"}}]),
+            "malformed",
+            id="a resource of another type",
+        ),
+        pytest.param(
+            _bundle_json(entry=[{"resource": {"resourceType": "Patient"}}]), "malformed", id="no id"
+        ),
+    ],
+)
+async def test_a_bundle_that_is_incomplete_or_misshapen_is_a_typed_error(
+    body: bytes, message: str
+) -> None:
+    adapter = _adapter(lambda _request: httpx.Response(200, content=body))
+
+    with pytest.raises(PermanentSourceError, match=message):
+        await adapter.list_patients(None, page_size=5)
+
+
+async def test_an_outcome_entry_in_a_bundle_is_skipped_and_a_matching_total_passes() -> None:
+    body = _bundle_json(
+        total=2,
+        entry=[
+            {"resource": _patient(1), "search": {"mode": "match"}},
+            {"resource": {"resourceType": "OperationOutcome"}, "search": {"mode": "outcome"}},
+            {"resource": _patient(2)},
+        ],
+    )
+    adapter = _adapter(lambda _request: httpx.Response(200, content=body))
+
+    page = await adapter.list_patients(None, page_size=5)
+
+    assert [patient.external_id for patient in page.items] == ["p1", "p2"]
+
+
+async def test_an_empty_bundle_is_an_empty_listing() -> None:
+    adapter = _adapter(lambda _request: httpx.Response(200, content=_bundle_json(total=0)))
+
+    page = await adapter.list_patients(None, page_size=5)
+
+    assert (page.items, page.next_cursor) == ((), None)
+
+
 async def test_a_malformed_bundle_is_a_typed_error() -> None:
     body = b'{"resourceType":"Bundle","entry":[{"resource":{"resourceType":"Observation"}}]}'
     adapter = _adapter(lambda _request: httpx.Response(200, content=body))

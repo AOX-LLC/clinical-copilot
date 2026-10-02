@@ -213,14 +213,9 @@ class FhirR4Adapter:
     async def _search(
         self, resource_type: str, parameters: Mapping[str, str]
     ) -> list[dict[str, Any]]:
-        # No _count: the server truncates without a next link, and returns everything without it.
+        # No _count: fhir-candle truncates without a next link, and returns everything without it.
         response = await self._get(f"/{resource_type}", parameters, resource_type)
-        bundle = _parse_json(response.content)
-        entries = bundle.get("entry", [])
-        resources = [entry["resource"] for entry in entries]
-        if not all(isinstance(r, dict) and "id" in r and "resourceType" in r for r in resources):
-            raise PermanentSourceError(f"{resource_type}: the source returned a malformed bundle")
-        return resources
+        return _resources_of(_parse_json(response.content), resource_type)
 
     async def _get(self, path: str, parameters: Mapping[str, str], what: str) -> httpx.Response:
         try:
@@ -273,6 +268,45 @@ def _checked(response: httpx.Response, what: str) -> httpx.Response:
     if status >= httpx.codes.INTERNAL_SERVER_ERROR:
         raise RetryableSourceError(f"{what}: source error ({status})")
     raise PermanentSourceError(f"{what}: the source refused the request ({status})")
+
+
+def _resources_of(bundle: dict[str, Any], resource_type: str) -> list[dict[str, Any]]:
+    """The resources of a complete searchset of one type, or a typed error.
+
+    A server that pages (HAPI does, by default) would otherwise be read as a short result and
+    its records silently dropped, so a ``next`` link or a ``total`` that disagrees with the
+    entries is refused.
+    """
+    if bundle.get("resourceType") != "Bundle":
+        raise PermanentSourceError(f"{resource_type}: the source did not return a bundle")
+    links, entries = bundle.get("link", []), bundle.get("entry", [])
+    if not isinstance(links, list) or not isinstance(entries, list):
+        raise PermanentSourceError(f"{resource_type}: the source returned a malformed bundle")
+    if any(isinstance(link, dict) and link.get("relation") == "next" for link in links):
+        raise PermanentSourceError(f"{resource_type}: the source pages its results")
+    resources = [_resource_of(entry, resource_type) for entry in entries if not _is_outcome(entry)]
+    total = bundle.get("total")
+    if total is not None and not (str(total).isdecimal() and int(str(total)) == len(resources)):
+        problem = "malformed" if not str(total).isdecimal() else "incomplete"
+        raise PermanentSourceError(f"{resource_type}: the source returned a {problem} bundle")
+    return resources
+
+
+def _is_outcome(entry: object) -> bool:
+    """An OperationOutcome entry (``search.mode`` outcome) reports on the search, not a match."""
+    search = entry.get("search") if isinstance(entry, dict) else None
+    return isinstance(search, dict) and search.get("mode") == "outcome"
+
+
+def _resource_of(entry: object, resource_type: str) -> dict[str, Any]:
+    resource = entry.get("resource") if isinstance(entry, dict) else None
+    if (
+        not isinstance(resource, dict)
+        or resource.get("resourceType") != resource_type
+        or not isinstance(resource.get("id"), str)
+    ):
+        raise PermanentSourceError(f"{resource_type}: the source returned a malformed bundle")
+    return resource
 
 
 def _retry_after(response: httpx.Response) -> float | None:
