@@ -17,8 +17,10 @@ from tests.conftest import alembic_config
 pytestmark = pytest.mark.db
 
 TIMELINE_TABLES = {
+    "data_key",
     "import_run",
     "patient",
+    "patient_blind_index",
     "patient_source_link",
     "source_record",
     "source_resource_head",

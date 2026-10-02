@@ -6,9 +6,11 @@ snapshot is current. ``timeline_event`` is a projection of the current snapshots
 can be rebuilt from them at any time. Citations point at snapshots, so they keep
 resolving to the exact content cited after re-imports and source edits.
 
-Columns ending in ``_enc`` hold ciphertext only, sealed through ``PayloadSealer``. The
-AES-GCM sealer arrives in a later phase (docs/adr/0008-field-level-encryption.md); until
-then no production code path writes patient payloads.
+Columns ending in ``_enc`` hold ciphertext only, sealed through ``PayloadSealer`` by the
+AES-GCM ``FieldSealer`` in ``app.crypto`` (docs/adr/0014-field-encryption-implementation.md).
+``data_key`` holds each patient's data key wrapped under a key-encryption key that lives
+outside the database, and ``patient_blind_index`` holds the HMAC digests that make exact-match
+patient lookup possible without a stored name.
 """
 
 import uuid
@@ -111,9 +113,59 @@ class Patient(Base):
     family_name_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
     birth_date_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
     identifiers_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
-    name_bidx: Mapped[bytes | None] = mapped_column(LargeBinary, index=True)
     sex_at_birth: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class DataKey(Base):
+    """A patient's data key, wrapped under the key-encryption key; one row with no patient is
+    the system key for records with no patient subject.
+
+    The app role may read and insert, never update: destroying a key (``wrapped_key`` to NULL,
+    ``destroyed_at`` set) is an owner-role operation that makes the patient's data unreadable.
+    """
+
+    __tablename__ = "data_key"
+    __table_args__ = (
+        CheckConstraint(
+            "(wrapped_key IS NULL) = (destroyed_at IS NOT NULL)",
+            name="key_present_unless_destroyed",
+        ),
+        # NULL patients never collide under a plain unique constraint; this allows one system key.
+        Index(
+            "ux_data_key_one_system_key",
+            text("(true)"),
+            unique=True,
+            postgresql_where=text("patient_id IS NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    patient_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("patient.id"), unique=True)
+    kek_version: Mapped[int] = mapped_column(SmallInteger)
+    wrapped_key: Mapped[bytes | None] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    destroyed_at: Mapped[datetime | None]
+
+
+class PatientBlindIndex(Base):
+    """HMAC digests of a patient's name tokens, birth date and identifiers, for exact lookup."""
+
+    __tablename__ = "patient_blind_index"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('name_token', 'birth_date', 'identifier')", name="kind_known_value"
+        ),
+        CheckConstraint("octet_length(digest) = 32", name="digest_is_sha256_length"),
+    )
+
+    kind: Mapped[str] = mapped_column(Text, primary_key=True)
+    digest: Mapped[bytes] = mapped_column(LargeBinary, primary_key=True)
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("patient.id"), primary_key=True, index=True
+    )
 
 
 class PatientSourceLink(Base):
