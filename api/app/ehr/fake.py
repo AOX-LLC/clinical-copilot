@@ -108,6 +108,8 @@ class FakeAdapter:
         )
 
     async def list_patients(self, cursor: str | None, page_size: int) -> Page[SourcePatient]:
+        if page_size < 1:
+            raise ValueError("page_size must be at least 1")
         self._raise_if_throttled()
         patient_keys = sorted(
             key for key, kind in self._kinds.items() if kind is RecordKind.PATIENT
@@ -186,19 +188,11 @@ class FakeAdapter:
         self, headers: Mapping[str, str], body: bytes
     ) -> list[ChangeNotification]:
         lowered_headers = {name.lower(): value for name, value in headers.items()}
-        expected = self.sign_notification(body)[SIGNATURE_HEADER]
-        if not hmac.compare_digest(lowered_headers.get(SIGNATURE_HEADER, ""), expected):
+        provided = lowered_headers.get(SIGNATURE_HEADER, "").encode("utf-8", "replace")
+        expected = self.sign_notification(body)[SIGNATURE_HEADER].encode("ascii")
+        if not hmac.compare_digest(provided, expected):
             raise SignatureInvalidError("notification signature does not match")
-
-        try:
-            events = json.loads(body)["events"]
-        except (json.JSONDecodeError, KeyError, TypeError) as error:
-            raise PermanentSourceError("notification body is not the expected shape") from error
-        return [
-            ChangeNotification(event["resource_type"], event["resource_id"], event["event_type"])
-            for event in events
-            if event.get("event_type") in KNOWN_EVENT_TYPES
-        ]
+        return _parse_events(body)
 
     def _stamp(self, key: ResourceKey, version_number: int) -> _StoredVersion:
         self._clock += timedelta(seconds=1)
@@ -230,6 +224,24 @@ class FakeAdapter:
             raise RateLimitedError("source asked the client to slow down", retry_after_seconds=1.0)
 
 
+def _parse_events(body: bytes) -> list[ChangeNotification]:
+    """Parse a verified notification body, ignoring event types this source does not know."""
+    try:
+        events = json.loads(body)["events"]
+        if not isinstance(events, list):
+            raise TypeError("events must be a list")
+        return [_parse_event(event) for event in events if event["event_type"] in KNOWN_EVENT_TYPES]
+    except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError) as error:
+        raise PermanentSourceError("notification body is not the expected shape") from error
+
+
+def _parse_event(event: Mapping[str, Any]) -> ChangeNotification:
+    resource_type, resource_id = event["resource_type"], event["resource_id"]
+    if not isinstance(resource_type, str) or not isinstance(resource_id, str):
+        raise TypeError("resource_type and resource_id must be strings")
+    return ChangeNotification(resource_type, resource_id, event["event_type"])
+
+
 def _encode_cursor(offset: int) -> str:
     return base64.urlsafe_b64encode(f"offset:{offset}".encode()).decode("ascii")
 
@@ -238,9 +250,10 @@ def _decode_cursor(cursor: str | None) -> int:
     if cursor is None:
         return 0
     try:
-        label, _, offset = base64.urlsafe_b64decode(cursor).decode("ascii").partition(":")
-        if label != "offset":
-            raise ValueError(label)
-        return int(offset)
+        label, _, offset_text = base64.urlsafe_b64decode(cursor).decode("ascii").partition(":")
+        offset = int(offset_text)
+        if label != "offset" or offset < 0:
+            raise ValueError("not an offset cursor")
+        return offset
     except (binascii.Error, UnicodeDecodeError, ValueError) as error:
         raise PermanentSourceError("cursor is not one this source issued") from error
