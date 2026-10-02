@@ -17,6 +17,8 @@ ENCOUNTER_ID = "11111111-0000-4000-8000-000000000002"
 CLAIM_ID = "11111111-0000-4000-8000-000000000003"
 CARE_TEAM_ID = "11111111-0000-4000-8000-000000000004"
 CARE_PLAN_ID = "11111111-0000-4000-8000-000000000005"
+MEDICATION_ID = "11111111-0000-4000-8000-000000000006"
+MEDICATION_REQUEST_ID = "11111111-0000-4000-8000-000000000007"
 PRACTITIONER_ID = "22222222-0000-4000-8000-000000000001"
 ORGANIZATION_ID = "22222222-0000-4000-8000-000000000002"
 NPI_QUERY = "Practitioner?identifier=http://example.test/npi|0000000001"
@@ -93,13 +95,70 @@ def test_trim_removes_references_to_dropped_resources_and_the_list_they_emptied(
     assert care_plan["subject"] == {"reference": f"urn:uuid:{PATIENT_ID}"}
 
 
+def _medication_bundle() -> dict[str, Any]:
+    medication = {
+        "resourceType": "Medication",
+        "id": MEDICATION_ID,
+        "meta": {"versionId": "1"},
+        "code": {
+            "coding": [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm", "code": "1"}]
+        },
+    }
+    request = {
+        "resourceType": "MedicationRequest",
+        "id": MEDICATION_REQUEST_ID,
+        "subject": {"reference": f"urn:uuid:{PATIENT_ID}"},
+        "medicationReference": {"reference": f"urn:uuid:{MEDICATION_ID}"},
+    }
+    return _bundle({"resourceType": "Patient", "id": PATIENT_ID}, medication, request)
+
+
+def test_trim_inlines_the_medication_a_request_points_at() -> None:
+    trimmed = trim_bundle(_medication_bundle())
+
+    assert [e["resource"]["resourceType"] for e in trimmed["entry"]] == [
+        "Patient",
+        "MedicationRequest",
+    ]
+    request = trimmed["entry"][1]["resource"]
+    assert request["medicationReference"] == {"reference": f"#{MEDICATION_ID}"}
+    assert request["contained"] == [
+        {
+            "resourceType": "Medication",
+            "id": MEDICATION_ID,
+            "code": {
+                "coding": [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm", "code": "1"}]
+            },
+        }
+    ]
+
+
+def test_a_request_with_its_own_code_is_left_alone() -> None:
+    bundle = _medication_bundle()
+    request = bundle["entry"][2]["resource"]
+    del request["medicationReference"]
+    request["medicationCodeableConcept"] = {"text": "synthetic"}
+
+    trimmed = trim_bundle(bundle)
+
+    assert "contained" not in trimmed["entry"][1]["resource"]
+
+
+def test_a_medication_reference_survives_the_put_rewrite_unchanged() -> None:
+    loadable = to_put_bundle(trim_bundle(_medication_bundle()), _shared())
+
+    request = loadable["entry"][1]["resource"]
+    assert request["medicationReference"] == {"reference": f"#{MEDICATION_ID}"}
+    assert request["subject"] == {"reference": f"Patient/{PATIENT_ID}"}
+
+
 def test_trim_leaves_the_input_untouched() -> None:
-    original = _patient_bundle()
-    snapshot = copy.deepcopy(original)
+    for original in (_patient_bundle(), _medication_bundle()):
+        snapshot = copy.deepcopy(original)
 
-    trim_bundle(original)
+        trim_bundle(original)
 
-    assert original == snapshot
+        assert original == snapshot
 
 
 def test_every_entry_becomes_a_put_on_its_own_id() -> None:
