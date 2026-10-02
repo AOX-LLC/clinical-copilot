@@ -22,6 +22,7 @@ from app.timeline.ingest import (
     IngestOutcome,
     SealContext,
     TimelineEventDraft,
+    TimelineProjector,
     ingest_snapshot,
 )
 from app.timeline.models import Patient, SourceResourceHead, StoredSourceRecord, TimelineEvent
@@ -30,6 +31,7 @@ from tests.conftest import APP_ROLE
 from tests.fixtures import (
     FAKE_SOURCE,
     NOTIFICATION_SECRET,
+    SENTINEL_FAMILY_NAME,
     SOURCE_CLOCK_START,
     populated_fake_adapter,
     synthetic_hba1c,
@@ -118,6 +120,22 @@ class IngestHarness:
             assert patient_id is not None
             self._patients[external_id] = patient_id
         return self._patients[external_id]
+
+
+async def _ingest_once(
+    engine: AsyncEngine, record: SourceRecord, projector: TimelineProjector
+) -> IngestOutcome:
+    async with AsyncSession(engine) as session, session.begin():
+        patient_id = await session.scalar(
+            insert(Patient).values(sex_at_birth="unknown").returning(Patient.id)
+        )
+        context = IngestContext(
+            source_system_id=await _fhir_local_id(session),
+            projector=projector,
+            sealer=LabelingTestSealer(),
+            patient_id=patient_id,
+        )
+        return await ingest_snapshot(session, record, context, INGEST_CLOCK_START)
 
 
 async def _fhir_local_id(session: AsyncSession) -> int:
@@ -245,3 +263,44 @@ async def test_a_record_whose_hash_does_not_match_its_payload_is_refused(
     with pytest.raises(IngestError, match="content hash does not match"):
         await harness.ingest(tampered, "patient-1")
     assert await _snapshot_count(engine) == 0
+
+
+def test_a_draft_repr_names_the_row_but_not_its_content() -> None:
+    draft = TimelineEventDraft(
+        source_path="/component/0",
+        kind=TimelineKind.LAB,
+        occurred=parse_fhir_datetime("2026-03-08"),
+        sort_at=INGEST_CLOCK_START,
+        code_display=SENTINEL_FAMILY_NAME,
+        value_text=SENTINEL_FAMILY_NAME,
+    )
+
+    assert "/component/0" in repr(draft)
+    assert SENTINEL_FAMILY_NAME not in repr(draft)
+    assert "2026" not in repr(draft)
+
+
+async def test_a_database_rejection_names_the_resource_but_not_its_content(
+    engine: AsyncEngine,
+) -> None:
+    def project_inverted_range(record: SourceRecord) -> Sequence[TimelineEventDraft]:
+        return [
+            TimelineEventDraft(
+                source_path="",
+                kind=TimelineKind.LAB,
+                occurred=None,
+                sort_at=INGEST_CLOCK_START,
+                code_display=SENTINEL_FAMILY_NAME,
+                ref_low=Decimal("9"),
+                ref_high=Decimal("1"),
+            )
+        ]
+
+    record = await populated_fake_adapter().get_record("Observation", "obs-1-1")
+
+    with pytest.raises(IngestError) as raised:
+        await _ingest_once(engine, record, project_inverted_range)
+
+    surfaced = f"{raised.value} {raised.value.__cause__}"
+    assert "Observation/obs-1-1" in str(raised.value)
+    assert SENTINEL_FAMILY_NAME not in surfaced

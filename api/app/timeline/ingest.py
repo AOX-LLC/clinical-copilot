@@ -12,13 +12,14 @@ Callers own the transaction: run ``ingest_snapshot`` inside ``session.begin()``.
 import hmac
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Protocol
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ehr.ports import SourceRecord
@@ -49,8 +50,10 @@ class PayloadSealer(Protocol):
     def seal(self, plaintext: bytes, context: SealContext) -> bytes: ...
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class TimelineEventDraft:
+    """One timeline row a projector wants stored. Its repr names the row, never its content."""
+
     source_path: str
     kind: TimelineKind
     occurred: ClinicalTime | None
@@ -63,12 +66,15 @@ class TimelineEventDraft:
     recorded_at: datetime | None = None
     value_numeric: Decimal | None = None
     value_unit: str | None = None
-    value_text: str | None = field(default=None, repr=False)
+    value_text: str | None = None
     ref_low: Decimal | None = None
     ref_high: Decimal | None = None
     ref_text: str | None = None
     source_interpretation: str | None = None
-    detail_json: bytes | None = field(default=None, repr=False)
+    detail_json: bytes | None = None
+
+    def __repr__(self) -> str:
+        return f"TimelineEventDraft(source_path={self.source_path!r}, kind={self.kind.value!r})"
 
 
 class TimelineProjector(Protocol):
@@ -95,13 +101,19 @@ async def ingest_snapshot(
     session: AsyncSession, record: SourceRecord, context: IngestContext, now: datetime
 ) -> IngestOutcome:
     _verify_content_hash(record)
-    snapshot_id, snapshot_created = await _store_snapshot(session, record, context, now)
-    previous_head = await _move_head(session, record, context, snapshot_id, now)
+    try:
+        snapshot_id, snapshot_created = await _store_snapshot(session, record, context, now)
+        previous_head = await _move_head(session, record, context, snapshot_id, now)
 
-    head_moved = previous_head != snapshot_id
-    if head_moved:
-        await _supersede_rows_of(session, previous_head, now)
-        await _project(session, record, snapshot_id, context, now)
+        head_moved = previous_head != snapshot_id
+        if head_moved:
+            await _supersede_rows_of(session, previous_head, now)
+            await _project(session, record, snapshot_id, context, now)
+    except DBAPIError as error:
+        reason = type(error.orig).__name__ if error.orig is not None else type(error).__name__
+        raise IngestError(
+            f"database rejected {record.resource_type}/{record.resource_id}: {reason}"
+        ) from error
     return IngestOutcome(snapshot_id, snapshot_created, head_moved)
 
 
@@ -118,7 +130,8 @@ async def _store_snapshot(
 ) -> tuple[uuid.UUID, bool]:
     new_id = uuid.uuid4()
     sealed_payload = context.sealer.seal(
-        record.payload, SealContext("source_record", "payload_enc", new_id)
+        record.payload,
+        SealContext("source_record", "payload_enc", new_id),
     )
     inserted_id = await session.scalar(
         insert(StoredSourceRecord)

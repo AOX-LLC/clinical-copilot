@@ -10,7 +10,10 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 
 
 def create_engine(database_url: str) -> AsyncEngine:
-    return create_async_engine(database_url, pool_pre_ping=True, pool_size=5, max_overflow=5)
+    # Bound parameters are patient data; keep them out of exception messages and logs.
+    return create_async_engine(
+        database_url, pool_pre_ping=True, pool_size=5, max_overflow=5, hide_parameters=True
+    )
 
 
 def expected_schema_revision() -> str:
