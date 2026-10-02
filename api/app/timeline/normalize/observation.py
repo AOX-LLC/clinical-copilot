@@ -115,14 +115,26 @@ def _value_fields(holder: Json) -> dict[str, Any]:
     return {}
 
 
+POPULATION_QUALIFIERS = ("appliesTo", "age")
+
+
 def _range_fields(holder: Json, value_unit: str | None) -> dict[str, Any]:
-    """The first reference range. Bounds count only in the value's own UCUM unit."""
-    ranges = [r for r in holder.get("referenceRange") or [] if isinstance(r, dict)]
-    if not ranges:
+    """The reference range, when exactly one applies to everyone.
+
+    Several ranges are for different populations (by age, sex, pregnancy), and a range with a
+    population qualifier says nothing about this patient. Only a single unqualified range is
+    carried; otherwise the row has no range. Bounds count only in the value's own UCUM unit.
+    """
+    ranges = [
+        r
+        for r in holder.get("referenceRange") or []
+        if isinstance(r, dict) and not any(q in r for q in POPULATION_QUALIFIERS)
+    ]
+    if len(ranges) != 1 or len(holder["referenceRange"]) != 1:
         return {}
-    first = ranges[0]
-    fields: dict[str, Any] = {"ref_text": first.get("text")}
-    low, high = ucum_quantity(first.get("low")), ucum_quantity(first.get("high"))
+    only = ranges[0]
+    fields: dict[str, Any] = {"ref_text": only.get("text")}
+    low, high = ucum_quantity(only.get("low")), ucum_quantity(only.get("high"))
     bounds = [b for b in (low, high) if b is not None]
     if value_unit is not None and all(unit == value_unit for _, unit in bounds):
         low_value = low[0] if low else None
