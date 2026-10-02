@@ -19,3 +19,6 @@ Each record states one decision, why it was made, and what it costs. Records are
 | [0013](0013-fhir-seeding-and-adapter-limits.md) | Seed fhir-candle with PUT transactions, and adapt to what it cannot do | Accepted |
 | [0014](0014-field-encryption-implementation.md) | How field encryption is built: key layout, blind indexes and what is not yet wired | Accepted |
 | [0015](0015-timeline-ingest-and-normalization.md) | How ingest and normalization work: what is projected, what is skipped, and how a run behaves | Accepted |
+| [0016](0016-practice-supplements-and-protocols.md) | Supplement regimens and practice protocols as FHIR resources, generated deterministically | Accepted |
+| [0017](0017-source-deletions-and-cross-source-patients.md) | Tombstone records a complete read no longer sees; never merge patients across sources on our own | Accepted |
+| [0018](0018-healthie-adapter.md) | The Healthie adapter, built from the published schema and never run against a live account | Accepted |

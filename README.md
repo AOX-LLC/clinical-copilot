@@ -23,7 +23,7 @@ In development. Phase 1 provides the architecture, the normalized timeline schem
 - The API (FastAPI) owns all clinical logic, authorization and model calls.
 - Postgres stores the normalized timeline; every row keeps provenance back to the exact source record it came from. Audit logs join it in later phases.
 - A local in-memory FHIR R4 server (fhir-candle) stands in for the EHR.
-- EHR adapters for FHIR R4 and Healthie sit behind one interface, so the rest of the system does not depend on a particular EHR.
+- EHR adapters for FHIR R4 and Healthie sit behind one interface, so the rest of the system does not depend on a particular EHR. The Healthie adapter was built from Healthie's published schema and has not run against a live Healthie account; it is tested against hand-built synthetic fixtures only.
 
 See [docs/architecture.md](docs/architecture.md), [docs/threat-model.md](docs/threat-model.md) and the decision records in [docs/adr/](docs/adr/).
 
