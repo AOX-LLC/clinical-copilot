@@ -78,6 +78,15 @@ def status_code(codeable: Any) -> str | None:
     return first_concept(codeable).code
 
 
+# A condition or allergy the source says was never true for the patient has no place on a
+# chart: it was recorded by mistake, or ruled out. The snapshot keeps it.
+NOT_TRUE_VERIFICATIONS = frozenset({"entered-in-error", "refuted"})
+
+
+def verification_code(resource: Json) -> str | None:
+    return status_code(resource.get("verificationStatus"))
+
+
 def clinical_time(ctx: Context, path: str, raw: Any) -> ClinicalTime | None:
     if raw is None:
         return None

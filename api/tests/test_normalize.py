@@ -463,3 +463,39 @@ def test_a_reference_bound_with_a_comparator_is_not_a_number() -> None:
     (row,) = project_resource(resource)
 
     assert (row.ref_low, row.ref_high, row.ref_text) == (None, None, "<5")
+
+
+@pytest.mark.parametrize("verification", ["entered-in-error", "refuted"])
+@pytest.mark.parametrize(
+    ("resource_type", "resource_id"),
+    [("Condition", RESOLVED_CONDITION), ("AllergyIntolerance", ALLERGY)],
+)
+def test_a_condition_or_allergy_that_was_never_true_has_no_timeline_row(
+    resource_type: str, resource_id: str, verification: str
+) -> None:
+    resource = dataset_resource(resource_type, resource_id)
+    resource.pop("clinicalStatus")  # FHIR forbids it with entered-in-error
+    resource["verificationStatus"] = {"coding": [{"code": verification}]}
+
+    assert project_resource(resource) == []
+
+
+@pytest.mark.parametrize(
+    ("resource_type", "resource_id"),
+    [("Condition", ACTIVE_CONDITION), ("AllergyIntolerance", ALLERGY)],
+)
+def test_a_less_than_confirmed_verification_is_carried_in_the_detail(
+    resource_type: str, resource_id: str
+) -> None:
+    resource = dataset_resource(resource_type, resource_id)
+    resource["verificationStatus"] = {"coding": [{"code": "unconfirmed"}]}
+
+    (row,) = project_resource(resource)
+
+    assert detail(row)["verification"] == "unconfirmed"
+
+
+def test_a_confirmed_condition_keeps_its_verification_in_the_detail() -> None:
+    (row,) = project("Condition", ACTIVE_CONDITION)
+
+    assert detail(row) == {"verification": "confirmed"}
