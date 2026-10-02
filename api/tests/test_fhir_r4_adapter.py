@@ -2,7 +2,7 @@
 
 import base64
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -263,6 +263,46 @@ async def test_an_empty_bundle_is_an_empty_listing() -> None:
     page = await adapter.list_patients(None, page_size=5)
 
     assert (page.items, page.next_cursor) == ((), None)
+
+
+async def test_a_response_declared_larger_than_the_cap_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(fhir_r4, "MAX_RESPONSE_BYTES", 100)
+    adapter = _adapter(lambda _request: httpx.Response(200, content=b"x" * 101))
+
+    with pytest.raises(PermanentSourceError, match="larger than this adapter will read"):
+        await adapter.get_record("Observation", "obs-1")
+
+
+async def test_a_streamed_response_is_cut_off_at_the_cap_without_a_declared_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(fhir_r4, "MAX_RESPONSE_BYTES", 100)
+    chunks_read = []
+
+    async def body() -> AsyncIterator[bytes]:
+        for _ in range(50):
+            chunks_read.append(1)
+            yield b"x" * 60
+
+    adapter = _adapter(lambda _request: httpx.Response(200, content=body()))
+
+    with pytest.raises(PermanentSourceError, match="larger than this adapter will read"):
+        await adapter.get_record("Observation", "obs-1")
+
+    assert len(chunks_read) < 50  # it stopped reading; it did not buffer the whole stream
+
+
+async def test_a_listing_larger_than_the_snapshot_budget_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(fhir_r4, "MAX_SNAPSHOT_BYTES", 1000)
+    adapter = _replay_adapter([])
+    patient_id = next(iter(ReplayTransport().patient_ids))
+
+    with pytest.raises(PermanentSourceError, match="larger than this adapter will hold"):
+        await adapter.fetch_changes(patient_id, ALL_KINDS, None, None)
 
 
 async def test_a_malformed_bundle_is_a_typed_error() -> None:
