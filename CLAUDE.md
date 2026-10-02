@@ -25,11 +25,14 @@
 cp .env.example .env              # then set the two passwords
 docker compose up -d --wait       # whole stack
 docker compose down
+docker compose run --rm seed      # reload the dataset after the fhir service restarts
+data/synthea/generate.sh --check  # regenerate the dataset and compare with the committed manifest
 
 cd api
 uv sync
 uv run ruff check . && uv run ruff format --check . && uv run mypy
 uv run pytest                     # database tests need TEST_DATABASE_ADMIN_URL (see .env.example)
+LIVE_FHIR_BASE_URL=http://127.0.0.1:4603/fhir/r4 uv run pytest -m live   # needs the stack up
 DATABASE_URL=... uv run alembic revision -m "describe the change"
 
 cd web
@@ -40,7 +43,10 @@ npm run lint && npm run typecheck && npm test
 
 ## Layout
 - `api/app/timeline/`: schema models, canonical content hash, clinical time, snapshot ingestion.
-- `api/app/ehr/`: the adapter interface (`ports.py`) and the in-memory fake.
+- `api/app/ehr/`: the adapter interface (`ports.py`), the in-memory fake and the FHIR R4 adapter.
+- `api/app/crypto/`: the field cipher, key handling and blind indexes. `FieldSealer` is the only production sealer.
+- `api/app/fhir_seed/`: Synthea bundle transforms and the loader the `seed` service runs.
+- `data/synthea/`: the committed synthetic dataset and `generate.sh`, which regenerates it.
 - `api/migrations/`: Alembic revisions. They are hand-written, and each one grants the app role exactly what it needs.
 - `api/tests/contracts/`: the contract suite every EHR adapter must pass.
 - `web/`: the Next.js app.
@@ -48,7 +54,7 @@ npm run lint && npm run typecheck && npm test
 
 ## Conventions
 - **Source snapshots (`source_record`) are immutable.** The app role can only insert and read them. What is current lives in `source_resource_head`; `timeline_event` is a rebuildable projection.
-- **Columns ending in `_enc` hold ciphertext only.** Never write plaintext to them.
+- **Columns ending in `_enc` hold ciphertext only.** Never write plaintext to them, and never construct a stand-in sealer outside tests.
 - **Clinical times keep the precision the source gave.** Date-only values stay dates. Display and ordering use `CLINIC_TIMEZONE`.
 - **Payload content never goes into logs, exception messages or `repr`.**
 - **New tables get an explicit grant to `copilot_app` in their migration,** with the narrowest privileges that work.
