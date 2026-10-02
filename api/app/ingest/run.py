@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.crypto.errors import CryptoError
@@ -152,12 +153,17 @@ async def _run_locked(
             async with gate:
                 await _record_outcome(summary, patient, worker)
 
-        await asyncio.gather(*(one(patient) for patient in patients))
+        # A TaskGroup, not gather: an error nobody expected cancels the other patients before
+        # the run is marked failed and the lock is released, so nothing keeps writing after.
+        async with asyncio.TaskGroup() as group:
+            for patient in patients:
+                group.create_task(one(patient))
         summary.status = ImportStatus.FAILED if summary.failures else ImportStatus.SUCCEEDED
         await _finish_run(engine, summary)
     except BaseException as error:
         summary.status = ImportStatus.FAILED
-        summary.failures.append(type(error).__name__)
+        cause = error.exceptions[0] if isinstance(error, BaseExceptionGroup) else error
+        summary.failures.append(type(cause).__name__)
         await asyncio.shield(_finish_run(engine, summary))
         raise
     return summary
@@ -171,6 +177,11 @@ async def _record_outcome(
     except PATIENT_FAILURES as error:
         # The messages of these errors name a resource and a reason, never content.
         logger.error("patient %s failed: %s: %s", patient.external_id, type(error).__name__, error)
+        summary.failures.append(type(error).__name__)
+        return
+    except SQLAlchemyError as error:
+        # A database error's message can carry row values; name only its type.
+        logger.error("patient %s failed: %s", patient.external_id, type(error).__name__)
         summary.failures.append(type(error).__name__)
         return
     summary.patients += 1

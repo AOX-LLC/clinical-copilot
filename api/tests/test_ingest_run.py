@@ -1,15 +1,19 @@
 """Ingest behaviour on a three-patient slice of the dataset, as the application role."""
 
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.crypto.runtime import FieldCrypto
+from app.ingest import run as ingest_run
 from app.ingest.__main__ import main
 from app.ingest.run import ADVISORY_LOCK_KEY, IngestBusyError, run_ingest
 from app.timeline.patient_identity import find_patients, read_identity
@@ -30,7 +34,14 @@ SLICE = 3
 LEUKOCYTES = ("Observation", "0b56998e-f475-39ed-9bdc-fdefe1ba5e05")
 FIRST_PATIENT = ("Patient", "0b56998e-f475-39ed-f31e-e0e5f79c9aee")
 SECOND_PATIENTS_MEDICATION = ("MedicationRequest", "0b879479-3d66-a073-11a1-e749dce77bfb")
+SECOND_PATIENT = "0b879479-3d66-a073-a9d5-8ba6677556e2"
 RENAMED = "Zzyzx-Renamed"
+
+
+def _wrong_shape(resource: dict[str, Any]) -> dict[str, Any]:
+    """A contained medication whose coding is an object where FHIR has a list."""
+    resource["contained"][0]["code"]["coding"] = {"not": "a list"}
+    return resource
 
 
 def _set(path: tuple[str, ...], value: Any) -> Any:
@@ -200,3 +211,93 @@ def test_the_command_refuses_to_run_without_its_keys(
         monkeypatch.delenv(variable, raising=False)
 
     assert main() == 1
+
+
+async def test_a_resource_of_an_unexpected_shape_fails_only_its_patient(
+    migrated_database_url: str, engine: AsyncEngine
+) -> None:
+    crypto = real_crypto(new_key_material())
+    damaged = DatasetFhirTransport(
+        patient_limit=SLICE,
+        mutations={SECOND_PATIENTS_MEDICATION: _wrong_shape},
+    )
+
+    summary = await _ingest(migrated_database_url, crypto, damaged)
+
+    assert summary.status is ImportStatus.FAILED
+    assert summary.failures == ["NormalizationError"]
+    assert summary.patients == SLICE - 1
+    assert await _scalar(engine, "SELECT count(*) FROM patient") == SLICE - 1
+
+
+async def test_a_failed_patient_leaves_no_rows_behind(
+    migrated_database_url: str, engine: AsyncEngine
+) -> None:
+    crypto = real_crypto(new_key_material())
+    broken = DatasetFhirTransport(
+        patient_limit=SLICE,
+        mutations={SECOND_PATIENTS_MEDICATION: _wrong_shape},
+    )
+    await _ingest(migrated_database_url, crypto, broken)
+
+    # The Patient record is ingested first, so its snapshot must have rolled back too.
+    for resource_id in (SECOND_PATIENT, SECOND_PATIENTS_MEDICATION[1]):
+        assert (
+            await _scalar(
+                engine, "SELECT count(*) FROM source_record WHERE resource_id = :id", id=resource_id
+            )
+            == 0
+        )
+    assert (
+        await _scalar(
+            engine,
+            "SELECT count(*) FROM patient_source_link WHERE external_id = :id",
+            id=SECOND_PATIENT,
+        )
+        == 0
+    )
+    assert await _scalar(engine, "SELECT count(*) FROM data_key") == SLICE - 1
+    assert await _scalar(engine, "SELECT count(*) FROM patient") == SLICE - 1
+
+
+async def test_an_unexpected_error_stops_the_run_and_releases_the_lock(
+    migrated_database_url: str, engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def explode(*_: object) -> list[object]:
+        raise RuntimeError("not a failure anyone planned for")
+
+    monkeypatch.setattr(ingest_run, "_fetch_with_retry", explode)
+
+    with pytest.raises(ExceptionGroup):
+        await _ingest(
+            migrated_database_url,
+            real_crypto(new_key_material()),
+            DatasetFhirTransport(patient_limit=SLICE),
+        )
+
+    assert await _scalar(engine, "SELECT status::text || ':' || error_code FROM import_run") == (
+        "failed:RuntimeError"
+    )
+    assert await _scalar(engine, "SELECT pg_try_advisory_lock(:key)", key=ADVISORY_LOCK_KEY)
+
+
+async def test_a_database_error_in_one_patient_is_counted_and_the_others_continue() -> None:
+    class Worker:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def __call__(self, patient: object) -> ingest_run.PatientResult:
+            self.calls += 1
+            if self.calls == 1:
+                raise OperationalError("SELECT 1", {}, Exception("row values live here"))
+            return ingest_run.PatientResult()
+
+    summary = ingest_run.IngestSummary(uuid.uuid4(), ImportStatus.RUNNING)
+    worker = Worker()
+    patient = SimpleNamespace(external_id="p")
+
+    for _ in range(2):
+        await ingest_run._record_outcome(summary, patient, worker)  # type: ignore[arg-type]
+
+    assert summary.failures == ["OperationalError"]
+    assert summary.patients == 1
