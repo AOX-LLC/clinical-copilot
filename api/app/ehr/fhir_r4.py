@@ -17,6 +17,7 @@ Nothing here puts payload content into an exception message, a log line or a ``r
 import base64
 import binascii
 import json
+import math
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -45,6 +46,7 @@ from app.ehr.ports import (
 )
 
 CHANGES_PAGE_SIZE = 100
+MAX_RETRY_AFTER_SECONDS = 300.0
 SNAPSHOT_SECONDS = 300.0
 MAX_SNAPSHOTS = 4
 
@@ -310,10 +312,14 @@ def _resource_of(entry: object, resource_type: str) -> dict[str, Any]:
 
 
 def _retry_after(response: httpx.Response) -> float | None:
+    """The server's retry hint in seconds, kept finite and bounded so a caller can honor it."""
     try:
-        return max(0.0, float(response.headers["Retry-After"]))
+        seconds = float(response.headers["Retry-After"])
     except (KeyError, ValueError):
         return None
+    if not math.isfinite(seconds):
+        return None
+    return min(max(0.0, seconds), MAX_RETRY_AFTER_SECONDS)
 
 
 def _require_resource_type(resource_type: str) -> None:
