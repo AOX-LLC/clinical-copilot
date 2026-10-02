@@ -22,6 +22,8 @@ Disk encryption does not protect against a leaked dump, a backup copied to the w
 - **Keys:**
   - Each patient has a data key, wrapped by a key-encryption key held outside the database: a secret file locally, a KMS when deployed.
   - Rotation re-wraps data keys only. Destroying a patient's data key makes all of their encrypted fields unreadable.
+  - Records with no patient subject (practitioners, organizations) are sealed under a separate system key class. They hold no patient data, so crypto-shredding never needs to reach them.
+  - The sealer receives the patient id with every seal, so it always selects the right key.
 - **Lookup:** exact match only, through HMAC blind indexes (normalized name tokens, birth date) with a separate key.
 - **pgcrypto was rejected:** keys would travel in SQL text and could land in statement logs.
 - **No embeddings of patient free text.** They leak content and cannot be encrypted while staying searchable.

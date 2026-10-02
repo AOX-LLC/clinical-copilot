@@ -6,8 +6,9 @@ snapshot is current. ``timeline_event`` is a projection of the current snapshots
 can be rebuilt from them at any time. Citations point at snapshots, so they keep
 resolving to the exact content cited after re-imports and source edits.
 
-Columns ending in ``_enc`` hold ciphertext only (AES-GCM, sealed by the ingestion
-layer); see docs/adr/0008-field-level-encryption.md.
+Columns ending in ``_enc`` hold ciphertext only, sealed through ``PayloadSealer``. The
+AES-GCM sealer arrives in a later phase (docs/adr/0008-field-level-encryption.md); until
+then no production code path writes patient payloads.
 """
 
 import uuid
