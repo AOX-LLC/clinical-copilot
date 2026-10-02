@@ -39,11 +39,18 @@ class IngestError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class SealContext:
-    """Where a ciphertext will live. Sealers bind it as associated data."""
+    """Where a ciphertext will live, and whose key seals it.
+
+    Sealers bind table, column and row id as associated data. ``patient_id`` selects the
+    patient's data key, so destroying that key shreds the patient's data; ``None`` marks a
+    record with no patient subject (a practitioner, an organization), sealed under the
+    system key class described in ADR 0008.
+    """
 
     table: str
     column: str
     row_id: uuid.UUID
+    patient_id: uuid.UUID | None
 
 
 class PayloadSealer(Protocol):
@@ -131,7 +138,7 @@ async def _store_snapshot(
     new_id = uuid.uuid4()
     sealed_payload = context.sealer.seal(
         record.payload,
-        SealContext("source_record", "payload_enc", new_id),
+        SealContext("source_record", "payload_enc", new_id, context.patient_id),
     )
     inserted_id = await session.scalar(
         insert(StoredSourceRecord)
@@ -272,7 +279,9 @@ def _timeline_row(
     def seal(column: str, plaintext: bytes | None) -> bytes | None:
         if plaintext is None:
             return None
-        return context.sealer.seal(plaintext, SealContext("timeline_event", column, event_id))
+        return context.sealer.seal(
+            plaintext, SealContext("timeline_event", column, event_id, context.patient_id)
+        )
 
     occurred = draft.occurred
     period_end = draft.period_end
