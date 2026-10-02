@@ -22,10 +22,11 @@
 
 ## Commands
 ```bash
-cp .env.example .env              # then set the two passwords
+cp .env.example .env              # then set the two passwords and the two keys
 docker compose up -d --wait       # whole stack
 docker compose down
 docker compose run --rm seed      # reload the dataset after the fhir service restarts
+docker compose run --rm ingest    # read the FHIR server into the timeline again (idempotent)
 data/synthea/generate.sh --check  # regenerate the dataset and compare with the committed manifest
 
 cd api
@@ -45,6 +46,8 @@ npm run lint && npm run typecheck && npm test
 - `api/app/timeline/`: schema models, canonical content hash, clinical time, snapshot ingestion.
 - `api/app/ehr/`: the adapter interface (`ports.py`), the in-memory fake and the FHIR R4 adapter.
 - `api/app/crypto/`: the field cipher, key handling and blind indexes. `FieldSealer` is the only production sealer.
+- `api/app/timeline/normalize/`: the normalizers (source record to timeline rows) and the projector registry.
+- `api/app/ingest/`: the ingest command (`python -m app.ingest`) the `ingest` service runs.
 - `api/app/fhir_seed/`: Synthea bundle transforms and the loader the `seed` service runs.
 - `data/synthea/`: the committed synthetic dataset and `generate.sh`, which regenerates it.
 - `api/migrations/`: Alembic revisions. They are hand-written, and each one grants the app role exactly what it needs.
