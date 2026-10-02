@@ -8,7 +8,7 @@ The product needs a web UI, an API that owns all clinical logic and security, an
 ## Decision
 - **One repository** with `api/` (FastAPI, Python 3.12, uv) and `web/` (Next.js, TypeScript).
 - **Five Compose services** under project name `clinical-copilot`: `web` (4600), `api` (4601), `postgres` with pgvector (4602), `fhir` (4603), plus a one-shot `migrate`.
-- **Every published port binds to 127.0.0.1.** Every service has a healthcheck, a memory limit and `no-new-privileges`.
+- **Every published port binds to 127.0.0.1.** Every long-running service has a healthcheck; every service has a memory limit, a process limit and `no-new-privileges`.
 - **The browser talks only to `web`,** which rewrites `/api/*` to the API. Session cookies stay first-party and no CORS is opened.
 - **Two database roles.** Migrations run as the owner. The API connects as `copilot_app` with only the grants each migration gives it.
 - **No default secrets.** Compose refuses to start until `.env` provides them.

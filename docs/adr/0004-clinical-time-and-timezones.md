@@ -12,7 +12,7 @@ The classic bug is storing a date-only lab as midnight UTC: every US user then s
 - **Instants** are stored as UTC `timestamptz`, with the original text kept in `occurred_raw`.
 - **Year, month and day** precision are stored as a calendar `date` plus `time_precision`. Nothing invents a time of day or a timezone.
 - **Check constraints** tie each precision to its column: an instant has `occurred_at`; a calendar precision has `occurred_on`; `unknown` has neither.
-- **A time with a clock but no offset is rejected** at the adapter boundary, as FHIR requires an offset in that case.
+- **A time with a clock but no offset is rejected** by the parser every normalizer uses, as FHIR requires an offset in that case.
 - **One practice timezone** (`CLINIC_TIMEZONE`, IANA) drives ordering, display dates, "today", ages and alert due dates. Calendar-precision events sort at the start of their day in that zone.
 - **Birth dates stay dates.** Ages are computed in the practice timezone.
 - **Labs keep collection, result and receipt times separately.** Trends and deltas use collection time.
