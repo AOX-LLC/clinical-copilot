@@ -1,6 +1,6 @@
 # 0002. fhir-candle as the local FHIR server, chosen by measurement
 
-Status: Accepted
+Status: Accepted. The loader decision is superseded in part by [0013](0013-fhir-seeding-and-adapter-limits.md).
 
 ## Context
 The FHIR R4 adapter needs a real FHIR server holding synthetic patients, on a development machine with about 4 GB free that it shares with other stacks.

@@ -70,6 +70,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      seed:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
@@ -143,6 +145,28 @@ services:
       timeout: 10s
       retries: 6
       start_period: 120s
+
+  seed:
+    # One-shot: loads the committed synthetic dataset into the FHIR server, then exits.
+    # fhir-candle keeps its data in memory, so this runs on every `up` (ADR 0013).
+    build: ./api
+    image: clinical-copilot-api:local
+    command: ["python", "-m", "app.fhir_seed", "load", "/data/synthea"]
+    restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 100
+    mem_limit: 256m
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      FHIR_BASE_URL: http://fhir:5826/fhir/r4
+    volumes:
+      - ./data/synthea:/data/synthea:ro
+    depends_on:
+      fhir:
+        condition: service_healthy
 
 volumes:
   pgdata:
