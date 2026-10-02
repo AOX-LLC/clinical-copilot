@@ -2,6 +2,7 @@
 
 import dataclasses
 import json
+from collections import Counter
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
@@ -18,6 +19,7 @@ from tests.dataset import (
     count_by_type,
     dataset_record,
     dataset_resource,
+    patient_resources,
     record_of,
 )
 from tests.fixtures import SENTINEL_FAMILY_NAME
@@ -62,9 +64,9 @@ def detail(row: TimelineEventDraft) -> dict[str, Any]:
     return decoded
 
 
-def test_the_dataset_counts_match_adr_0012() -> None:
+def test_the_dataset_counts_match_adrs_0012_and_0016() -> None:
     assert dict(count_by_type()) == RESOURCE_COUNTS
-    assert sum(RESOURCE_COUNTS.values()) == 13_708
+    assert sum(RESOURCE_COUNTS.values()) == 13_803
 
 
 def test_encounter_spans_its_period() -> None:
@@ -380,7 +382,7 @@ def test_every_resource_in_the_dataset_projects_without_error() -> None:
         for resource in resources:
             produced += len(project_resource(resource))
 
-    assert produced == 12_939
+    assert produced == 13_034
 
 
 def _read(resource: dict[str, Any]) -> object:
@@ -651,3 +653,27 @@ def test_a_row_with_no_time_at_all_is_placed_by_when_the_source_updated_it() -> 
 
     assert row.occurred is None
     assert row.sort_at == updated
+
+
+def test_the_committed_dataset_has_practice_supplements_and_protocols_that_resolve() -> None:
+    kinds: Counter[str] = Counter()
+    supplement_ids: set[str] = set()
+    referenced: set[str] = set()
+    for resources in patient_resources():
+        for resource in resources:
+            for row in project_resource(resource):
+                kinds[row.kind.value] += 1
+            if resource["resourceType"] == "MedicationStatement":
+                supplement_ids.add(resource["id"])
+            if resource["resourceType"] == "CarePlan":
+                referenced.update(
+                    a["reference"]["reference"].removeprefix("urn:uuid:")
+                    for a in resource.get("activity", [])
+                    if "reference" in a
+                )
+
+    assert kinds["supplement"] == 73
+    assert kinds["protocol"] == 22
+    assert kinds["care_plan"] == 70
+    assert kinds["medication"] == 855
+    assert referenced == supplement_ids

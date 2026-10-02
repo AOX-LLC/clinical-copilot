@@ -14,7 +14,8 @@ from tests.fixtures import FAKE_SOURCE
 DATASET_DIRECTORY = Path(__file__).resolve().parents[2] / "data" / "synthea"
 PATIENT_FILES = sorted((DATASET_DIRECTORY / "patients").glob("*.json.gz"))
 
-# Resources per type in the committed dataset (ADR 0015); together they are ADR 0012's 13,708.
+# Resources per type in the committed dataset: ADR 0015's 13,708 plus the 95 resources the practice
+# generator adds (ADR 0016).
 RESOURCE_COUNTS = {
     "Patient": 28,
     "Encounter": 789,
@@ -24,7 +25,8 @@ RESOURCE_COUNTS = {
     "Procedure": 2202,
     "Immunization": 147,
     "AllergyIntolerance": 12,
-    "CarePlan": 70,
+    "CarePlan": 92,  # 70 from Synthea and 22 practice protocols
+    "MedicationStatement": 73,  # all practice supplements
 }
 
 
