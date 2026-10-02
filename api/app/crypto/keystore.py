@@ -13,7 +13,7 @@ from sqlalchemy import delete, event, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.crypto.errors import KeyUnavailableError
+from app.crypto.errors import KeyDestroyedError, KeyUnavailableError
 from app.crypto.keyring import KeyRing, KeyWrapper, generate_data_key
 from app.timeline.models import DataKey, PatientBlindIndex
 
@@ -66,7 +66,7 @@ class KeyStore:
     def _adopt(self, owner: uuid.UUID | None, row: DataKey) -> None:
         if row.wrapped_key is None:
             self._ring.discard(owner)
-            raise KeyUnavailableError(f"the data key for {_label(owner)} was destroyed")
+            raise KeyDestroyedError(f"the data key for {_label(owner)} was destroyed")
         if row.kek_version != self._wrapper.kek_version:
             raise KeyUnavailableError(
                 f"the data key for {_label(owner)} is wrapped under key-encryption key "
