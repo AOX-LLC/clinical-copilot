@@ -103,6 +103,9 @@ class AdapterCapabilities:
     supports_versions: bool
     supports_write_back: bool
     supports_notifications: bool
+    # False when the source cannot reliably answer "changed after this time": fetch_changes
+    # then ignores ``since`` and returns everything, and ingest skips content it has seen.
+    supports_since: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,7 +185,10 @@ class EhrAdapter(Protocol):
         since: datetime | None,
         cursor: str | None,
     ) -> Page[SourceRecord]:
-        """Return records of the given kinds updated strictly after ``since``."""
+        """Return records of the given kinds updated strictly after ``since``.
+
+        An adapter whose ``supports_since`` is False ignores ``since`` and returns every record.
+        """
         ...
 
     async def get_record(
