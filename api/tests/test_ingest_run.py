@@ -360,3 +360,36 @@ async def test_a_patient_whose_key_was_destroyed_is_skipped_not_recreated(
     assert second.snapshots_created == 0
     assert await _scalar(engine, "SELECT count(*) FROM patient") == SLICE
     assert await table_digests(engine) == before
+
+
+async def test_a_run_killed_before_it_finished_is_closed_by_the_next_one(
+    migrated_database_url: str, engine: AsyncEngine
+) -> None:
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT INTO import_run (source_system_id, trigger, status)"
+                " SELECT id, 'manual', 'running' FROM source_system WHERE code = 'fhir-local'"
+            )
+        )
+
+    summary = await _ingest(
+        migrated_database_url,
+        real_crypto(new_key_material()),
+        DatasetFhirTransport(patient_limit=1),
+    )
+
+    assert summary.succeeded
+    async with engine.connect() as connection:
+        runs = (
+            await connection.execute(
+                text(
+                    "SELECT status::text AS status, error_code, finished_at IS NOT NULL AS done"
+                    " FROM import_run ORDER BY started_at"
+                )
+            )
+        ).all()
+    assert [tuple(run) for run in runs] == [
+        ("failed", "abandoned", True),
+        ("succeeded", None, True),
+    ]
