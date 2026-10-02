@@ -85,6 +85,8 @@ async def test_a_wiped_and_reloaded_source_yields_no_new_snapshots(
     second = await _ingest(migrated_database_url, crypto, reloaded)
 
     assert first.snapshots_created == first.records_seen > 0
+    assert first.fetch_seconds > 0
+    assert first.write_seconds > 0
     assert (second.snapshots_created, second.heads_moved) == (0, 0)
     assert await table_digests(engine) == before
 

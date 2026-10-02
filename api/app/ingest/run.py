@@ -83,6 +83,8 @@ class PatientResult:
     records: Counter[str] = field(default_factory=Counter)
     snapshots_created: int = 0
     heads_moved: int = 0
+    fetch_seconds: float = 0.0
+    write_seconds: float = 0.0
 
 
 @dataclass(slots=True)
@@ -97,6 +99,9 @@ class IngestSummary:
     heads_moved: int = 0
     records_by_type: Counter[str] = field(default_factory=Counter)
     failures: list[str] = field(default_factory=list)
+    # Summed over patients, so with concurrent patients they exceed the wall-clock ``seconds``.
+    fetch_seconds: float = 0.0
+    write_seconds: float = 0.0
     seconds: float = 0.0
     peak_rss_mib: float = 0.0
 
@@ -196,6 +201,8 @@ async def _record_outcome(
     summary.records_seen += sum(result.records.values())
     summary.snapshots_created += result.snapshots_created
     summary.heads_moved += result.heads_moved
+    summary.fetch_seconds += result.fetch_seconds
+    summary.write_seconds += result.write_seconds
     summary.records_by_type.update(result.records)
 
 
@@ -210,11 +217,14 @@ class _PatientIngest:
     kinds: frozenset[RecordKind]
 
     async def __call__(self, patient: SourcePatient) -> PatientResult:
+        result = PatientResult()
+        fetch_started = time.monotonic()
         records = await _fetch_with_retry(self.adapter, patient.external_id, self.kinds)
         for record in records:
             _require_subject(record, patient.external_id)
+        result.fetch_seconds = time.monotonic() - fetch_started
+        write_started = time.monotonic()
         projector = build_projector(self.clinic_zone)
-        result = PatientResult()
         now = datetime.now(UTC)
         label = f"{patient.record.resource_type}/{patient.record.resource_id}"
         identity = identity_from_fhir_patient(parse_resource(patient.record.payload, label), label)
@@ -253,6 +263,7 @@ class _PatientIngest:
             for record in records:
                 tally.append(await ingest_snapshot(session, record, context, now))
                 result.records[record.resource_type] += 1
+        result.write_seconds = time.monotonic() - write_started
         result.snapshots_created = sum(item.snapshot_created for item in tally)
         result.heads_moved = sum(item.head_moved for item in tally)
         return result
