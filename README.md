@@ -9,7 +9,7 @@ Built by [AOX](https://automatedoperationsexperts.com).
 
 ## Synthetic data only
 
-Every patient in this project is synthetic. Patients are generated with Synthea, and a small synthetic lab feed adds the lab results. The project never uses, stores or accepts real patient data, and you should not load real data into it.
+Every patient in this project is synthetic. Patients will be generated with Synthea, and a small simulated lab feed will add the lab results. The project never uses, stores or accepts real patient data, and you should not load real data into it.
 
 Security controls are mapped to the HIPAA Security Rule's technical safeguards in [docs/threat-model.md](docs/threat-model.md). This is a demonstration project and makes no compliance claim.
 
@@ -21,8 +21,8 @@ In development. Phase 1 provides the architecture, the normalized timeline schem
 
 - The web app (Next.js) talks only to the API.
 - The API (FastAPI) owns all clinical logic, authorization and model calls.
-- Postgres stores the normalized timeline and the audit trail. Every row keeps provenance back to the exact source record it came from.
-- A local FHIR R4 server (HAPI) stands in for the EHR.
+- Postgres stores the normalized timeline; every row keeps provenance back to the exact source record it came from. Audit logs join it in later phases.
+- A local in-memory FHIR R4 server (fhir-candle) stands in for the EHR.
 - EHR adapters for FHIR R4 and Healthie sit behind one interface, so the rest of the system does not depend on a particular EHR.
 
 See [docs/architecture.md](docs/architecture.md), [docs/threat-model.md](docs/threat-model.md) and the decision records in [docs/adr/](docs/adr/).
@@ -35,8 +35,6 @@ Prerequisite: Docker with Compose v2.
 cp .env.example .env    # then set the two passwords
 docker compose up -d --wait
 ```
-
-The FHIR server takes a couple of minutes to become healthy on first start.
 
 | Service     | Port |
 | ----------- | ---- |
