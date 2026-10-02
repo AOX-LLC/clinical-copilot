@@ -7,9 +7,11 @@ client-assigned ids, so every entry becomes ``PUT Type/<synthea-uuid>`` and ever
 reference becomes ``Type/<id>``. The ids therefore match Synthea's and stay stable
 across reloads.
 
-``trim_bundle`` runs once, when the dataset is generated, and drops the resource types
-the product never reads (claims, imaging, device records and similar). ``to_put_bundle``
-runs on every load. Nothing here logs or echoes resource content.
+``trim_bundle`` runs once, when the dataset is generated. It drops the resource types the
+product never reads (claims, imaging, device records and similar), and it copies each
+``Medication`` a request points at into the request's ``contained`` list, so the
+medication's code travels inside the one record that is snapshotted and cited.
+``to_put_bundle`` runs on every load. Nothing here logs or echoes resource content.
 """
 
 from collections.abc import Iterable, Mapping
@@ -17,7 +19,8 @@ from typing import Any
 
 type Json = dict[str, Any]
 
-# What the adapter reads plus what those resources point at.
+# What the adapter reads plus what those resources point at. Medication is not listed: it is
+# inlined into the MedicationRequest that uses it.
 KEPT_TYPES = frozenset(
     {
         "Patient",
@@ -25,7 +28,6 @@ KEPT_TYPES = frozenset(
         "Condition",
         "Observation",
         "MedicationRequest",
-        "Medication",
         "Procedure",
         "Immunization",
         "AllergyIntolerance",
@@ -45,16 +47,36 @@ class SeedError(Exception):
 
 
 def trim_bundle(bundle: Mapping[str, Any]) -> Json:
-    """Drop resource types the product does not read, and any reference to a dropped resource."""
+    """Inline medications, drop types the product does not read, and references to them."""
     entries = bundle.get("entry", [])
     dropped_urls = {entry["fullUrl"] for entry in entries if _type_of(entry) not in KEPT_TYPES}
+    medications = {
+        entry["fullUrl"]: entry["resource"] for entry in entries if _type_of(entry) == "Medication"
+    }
     kept = []
     for entry in entries:
         if _type_of(entry) not in KEPT_TYPES:
             continue
-        cleaned = _strip_references_to(entry["resource"], dropped_urls)
-        kept.append({**entry, "resource": cleaned})
+        resource = _inline_medication(entry["resource"], medications)
+        kept.append({**entry, "resource": _strip_references_to(resource, dropped_urls)})
     return {**bundle, "entry": kept}
+
+
+def _inline_medication(resource: Mapping[str, Any], medications: Mapping[str, Json]) -> Json:
+    """Copy the referenced Medication into ``contained`` and point at it with ``#<id>``."""
+    if resource["resourceType"] != "MedicationRequest":
+        return dict(resource)
+    medication = medications.get(resource.get("medicationReference", {}).get("reference"))
+    if medication is None:
+        return dict(resource)
+    # A contained resource may not carry server metadata.
+    contained = {key: value for key, value in medication.items() if key != "meta"}
+    reference = {**resource["medicationReference"], "reference": f"#{medication['id']}"}
+    return {
+        **resource,
+        "contained": [*resource.get("contained", []), contained],
+        "medicationReference": reference,
+    }
 
 
 def _strip_references_to(node: Any, dropped_urls: set[str]) -> Any:
