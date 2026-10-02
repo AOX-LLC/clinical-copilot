@@ -5,22 +5,28 @@ which resource and version each one is. Normalizers turn them into timeline rows
 
 What the server cannot do is declared, not faked (ADR 0013): it has no exact-version reads
 (``supports_versions``), cannot answer "changed after" reliably (``supports_since``), and
-does not page, so the adapter reads a whole result and hands out offset cursors over it.
-Search results are re-serialized compactly with every number token and key kept, which
-hashes the same as the bytes a direct read returns.
+does not page. So when a listing starts, the adapter reads the whole result once, keeps
+it briefly in memory, and serves the pages from that snapshot: the work is linear, and pages
+cannot skip or repeat records if the source changes mid-listing. A cursor whose snapshot has
+expired is a retryable error. Search results are re-serialized compactly with every number
+token and key kept, which hashes the same as the bytes a direct read returns.
 
 Nothing here puts payload content into an exception message, a log line or a ``repr``.
 """
 
+import base64
+import binascii
 import json
 import re
-from collections.abc import Mapping
+import time
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 import httpx
 
-from app.ehr.cursors import decode_offset_cursor, encode_offset_cursor
 from app.ehr.ports import (
     AdapterCapabilities,
     ApprovedSummaryDocument,
@@ -39,7 +45,8 @@ from app.ehr.ports import (
 )
 
 CHANGES_PAGE_SIZE = 100
-REQUEST_TIMEOUT_SECONDS = 60.0
+SNAPSHOT_SECONDS = 300.0
+MAX_SNAPSHOTS = 4
 
 # The FHIR resource types behind each record kind this adapter can fetch.
 RESOURCE_TYPES_BY_KIND: dict[RecordKind, tuple[str, ...]] = {
@@ -56,6 +63,15 @@ RESOURCE_TYPES_BY_KIND: dict[RecordKind, tuple[str, ...]] = {
 
 _RESOURCE_TYPE = re.compile(r"[A-Za-z]{1,64}")
 _FHIR_ID = re.compile(r"[A-Za-z0-9\-.]{1,64}")
+_SNAPSHOT_ID = re.compile(r"[0-9a-f]{32}")
+_now = time.monotonic
+
+
+@dataclass(slots=True)
+class _Snapshot:
+    key: tuple[object, ...]
+    items: list[Any]
+    taken_at: float
 
 
 class _Number(str):
@@ -68,6 +84,7 @@ class FhirR4Adapter:
     def __init__(self, source: SourceSystemRef, client: httpx.AsyncClient) -> None:
         self._source = source
         self._client = client
+        self._snapshots: dict[str, _Snapshot] = {}
 
     @property
     def source(self) -> SourceSystemRef:
@@ -85,14 +102,12 @@ class FhirR4Adapter:
     async def list_patients(self, cursor: str | None, page_size: int) -> Page[SourcePatient]:
         if page_size < 1:
             raise ValueError("page_size must be at least 1")
-        offset = decode_offset_cursor(cursor)
-        patients = sorted(await self._search("Patient", {}), key=lambda item: item["id"])
-        page = patients[offset : offset + page_size]
-        next_offset = offset + len(page)
-        return Page(
-            items=tuple(SourcePatient(item["id"], self._record_of(item)) for item in page),
-            next_cursor=encode_offset_cursor(next_offset) if next_offset < len(patients) else None,
-        )
+
+        async def load() -> list[SourcePatient]:
+            found = sorted(await self._search("Patient", {}), key=lambda item: item["id"])
+            return [SourcePatient(item["id"], self._record_of(item)) for item in found]
+
+        return await self._page_of(("patients",), load, cursor, page_size)
 
     async def fetch_changes(
         self,
@@ -102,19 +117,19 @@ class FhirR4Adapter:
         cursor: str | None,
     ) -> Page[SourceRecord]:
         """Return every record of the kinds for the patient; ``since`` is ignored (ADR 0013)."""
-        offset = decode_offset_cursor(cursor)
         _require_fhir_id("Patient", patient_external_id)
-        records: list[SourceRecord] = []
-        for kind in sorted(kinds & RESOURCE_TYPES_BY_KIND.keys()):
-            for resource_type in RESOURCE_TYPES_BY_KIND[kind]:
-                records.extend(await self._records_of_type(resource_type, patient_external_id))
-        records.sort(key=lambda record: (record.resource_type, record.resource_id))
-        page = records[offset : offset + CHANGES_PAGE_SIZE]
-        next_offset = offset + len(page)
-        return Page(
-            items=tuple(page),
-            next_cursor=encode_offset_cursor(next_offset) if next_offset < len(records) else None,
-        )
+        wanted = sorted(kinds & RESOURCE_TYPES_BY_KIND.keys())
+
+        async def load() -> list[SourceRecord]:
+            records: list[SourceRecord] = []
+            for kind in wanted:
+                for resource_type in RESOURCE_TYPES_BY_KIND[kind]:
+                    records.extend(await self._records_of_type(resource_type, patient_external_id))
+            records.sort(key=lambda record: (record.resource_type, record.resource_id))
+            return records
+
+        key = ("changes", patient_external_id, tuple(wanted))
+        return await self._page_of(key, load, cursor, CHANGES_PAGE_SIZE)
 
     async def get_record(
         self, resource_type: str, resource_id: str, version_id: str | None = None
@@ -140,6 +155,48 @@ class FhirR4Adapter:
         self, headers: Mapping[str, str], body: bytes
     ) -> list[ChangeNotification]:
         raise OperationNotSupportedError("the FHIR server sends no change notifications")
+
+    async def _page_of[T](
+        self,
+        key: tuple[object, ...],
+        load: Callable[[], Awaitable[list[T]]],
+        cursor: str | None,
+        page_size: int,
+    ) -> Page[T]:
+        """One page of a listing, from the snapshot its first call took."""
+        if cursor is None:
+            snapshot_id, offset = uuid4().hex, 0
+            items = await load()
+            self._remember(snapshot_id, _Snapshot(key, items, _now()))
+        else:
+            snapshot_id, offset = _decode_cursor(cursor)
+            items = self._recall(snapshot_id, key).items
+        page = items[offset : offset + page_size]
+        next_offset = offset + len(page)
+        if next_offset >= len(items):
+            self._snapshots.pop(snapshot_id, None)
+            return Page(items=tuple(page), next_cursor=None)
+        return Page(items=tuple(page), next_cursor=_encode_cursor(snapshot_id, next_offset))
+
+    def _remember(self, snapshot_id: str, snapshot: _Snapshot) -> None:
+        self._snapshots = {
+            known_id: known
+            for known_id, known in self._snapshots.items()
+            if snapshot.taken_at - known.taken_at < SNAPSHOT_SECONDS
+        }
+        while len(self._snapshots) >= MAX_SNAPSHOTS:
+            oldest = min(self._snapshots, key=lambda known_id: self._snapshots[known_id].taken_at)
+            del self._snapshots[oldest]
+        self._snapshots[snapshot_id] = snapshot
+
+    def _recall(self, snapshot_id: str, key: tuple[object, ...]) -> _Snapshot:
+        snapshot = self._snapshots.get(snapshot_id)
+        if snapshot is None or _now() - snapshot.taken_at >= SNAPSHOT_SECONDS:
+            self._snapshots.pop(snapshot_id, None)
+            raise RetryableSourceError("the paging snapshot expired; start the listing again")
+        if snapshot.key != key:
+            raise PermanentSourceError("cursor belongs to a different listing")
+        return snapshot
 
     async def _records_of_type(self, resource_type: str, patient_id: str) -> list[SourceRecord]:
         if resource_type == "Patient":
@@ -179,6 +236,23 @@ class FhirR4Adapter:
             source_updated_at=_instant(meta.get("lastUpdated")),
             payload=payload if payload is not None else _dump(resource).encode("utf-8"),
         )
+
+
+def _encode_cursor(snapshot_id: str, offset: int) -> str:
+    return base64.urlsafe_b64encode(f"snapshot:{snapshot_id}:{offset}".encode()).decode("ascii")
+
+
+def _decode_cursor(cursor: str) -> tuple[str, int]:
+    try:
+        label, snapshot_id, offset_text = (
+            base64.urlsafe_b64decode(cursor).decode("ascii").split(":")
+        )
+        offset = int(offset_text)
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        raise PermanentSourceError("cursor is not one this source issued") from None
+    if label != "snapshot" or not _SNAPSHOT_ID.fullmatch(snapshot_id) or offset < 0:
+        raise PermanentSourceError("cursor is not one this source issued")
+    return snapshot_id, offset
 
 
 def _checked(response: httpx.Response, what: str) -> httpx.Response:
