@@ -513,6 +513,70 @@ async def test_a_cursor_whose_snapshot_expired_is_retryable(
         await adapter.fetch_changes(patient_id, ALL_KINDS, None, first.next_cursor)
 
 
+async def test_a_slow_walk_is_not_cut_off_while_each_page_renews_the_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(fhir_r4, "CHANGES_PAGE_SIZE", 3)
+    clock = [1000.0]
+    monkeypatch.setattr(fhir_r4, "_now", lambda: clock[0])
+    adapter = _replay_adapter([])
+    patient_id = next(iter(ReplayTransport().patient_ids))
+    page = await adapter.fetch_changes(patient_id, ALL_KINDS, None, None)
+    walked = len(page.items)
+
+    while page.next_cursor is not None:
+        clock[0] += fhir_r4.SNAPSHOT_SECONDS - 10  # each pause is just under the limit
+        page = await adapter.fetch_changes(patient_id, ALL_KINDS, None, page.next_cursor)
+        walked += len(page.items)
+
+    assert clock[0] - 1000.0 > fhir_r4.SNAPSHOT_SECONDS * 2
+    assert walked > 3
+
+
+async def test_the_least_recently_used_listing_is_the_one_evicted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(fhir_r4, "CHANGES_PAGE_SIZE", 3)
+    clock = [1000.0]
+    monkeypatch.setattr(fhir_r4, "_now", lambda: clock[0])
+    adapter = _replay_adapter([])
+    patient_id = next(iter(ReplayTransport().patient_ids))
+    cursors = []
+    for _ in range(fhir_r4.MAX_SNAPSHOTS):
+        clock[0] += 1
+        page = await adapter.fetch_changes(patient_id, ALL_KINDS, None, None)
+        assert page.next_cursor is not None
+        cursors.append(page.next_cursor)
+    clock[0] += 1
+    await adapter.fetch_changes(patient_id, ALL_KINDS, None, cursors[0])  # the first is in use
+    clock[0] += 1
+
+    await adapter.fetch_changes(patient_id, ALL_KINDS, None, None)  # a fifth listing starts
+
+    await adapter.fetch_changes(patient_id, ALL_KINDS, None, cursors[0])  # still there
+    with pytest.raises(RetryableSourceError, match="evicted by newer listings"):
+        await adapter.fetch_changes(patient_id, ALL_KINDS, None, cursors[1])
+
+
+async def test_the_errors_for_expired_evicted_and_unknown_cursors_say_which(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(fhir_r4, "CHANGES_PAGE_SIZE", 3)
+    clock = [1000.0]
+    monkeypatch.setattr(fhir_r4, "_now", lambda: clock[0])
+    adapter = _replay_adapter([])
+    patient_id = next(iter(ReplayTransport().patient_ids))
+    page = await adapter.fetch_changes(patient_id, ALL_KINDS, None, None)
+    assert page.next_cursor is not None
+    clock[0] += fhir_r4.SNAPSHOT_SECONDS + 1
+    forged = fhir_r4._encode_cursor("f" * 32, 3)
+
+    with pytest.raises(RetryableSourceError, match="expired after 300 s unused"):
+        await adapter.fetch_changes(patient_id, ALL_KINDS, None, page.next_cursor)
+    with pytest.raises(RetryableSourceError, match="no paging snapshot matches"):
+        await adapter.fetch_changes(patient_id, ALL_KINDS, None, forged)
+
+
 async def test_a_cursor_cannot_be_used_again_after_its_listing_finished(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
