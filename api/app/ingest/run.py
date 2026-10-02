@@ -85,6 +85,7 @@ class PatientResult:
     snapshots_created: int = 0
     heads_moved: int = 0
     tombstoned: int = 0
+    revived: int = 0
     fetch_seconds: float = 0.0
     write_seconds: float = 0.0
 
@@ -100,6 +101,7 @@ class IngestSummary:
     snapshots_created: int = 0
     heads_moved: int = 0
     tombstoned: int = 0
+    revived: int = 0
     records_by_type: Counter[str] = field(default_factory=Counter)
     failures: list[str] = field(default_factory=list)
     # Summed over patients, so with concurrent patients they exceed the wall-clock ``seconds``.
@@ -205,6 +207,7 @@ async def _record_outcome(
     summary.snapshots_created += result.snapshots_created
     summary.heads_moved += result.heads_moved
     summary.tombstoned += result.tombstoned
+    summary.revived += result.revived
     summary.fetch_seconds += result.fetch_seconds
     summary.write_seconds += result.write_seconds
     summary.records_by_type.update(result.records)
@@ -279,6 +282,7 @@ class _PatientIngest:
         result.write_seconds = time.monotonic() - write_started
         result.snapshots_created = sum(item.snapshot_created for item in tally)
         result.heads_moved = sum(item.head_moved for item in tally)
+        result.revived = sum(item.revived for item in tally)
         return result
 
 
