@@ -49,13 +49,16 @@ class DatasetFhirTransport(httpx.AsyncBaseTransport):
         for resources in _stored_resources()[:patient_limit]:
             for stored in resources:
                 resource = json.loads(json.dumps(stored))
+                # A server finds a record by what it was stored under; a mutation changes what
+                # it says, so it can serve a record that names a different patient.
+                owner = _owner_of(resource)
                 mutate = mutations.get((resource["resourceType"], resource["id"]))
                 if mutate is not None:
                     resource = mutate(resource)
                 resource["meta"] = {**resource.get("meta", {}), **meta}
-                self._add(resource)
+                self._add(resource, owner)
 
-    def _add(self, resource: dict[str, Any]) -> None:
+    def _add(self, resource: dict[str, Any], owner: str) -> None:
         body = json.dumps(resource, separators=(",", ":")).encode()
         key = (resource["resourceType"], resource["id"])
         self._by_key[key] = body
@@ -63,8 +66,7 @@ class DatasetFhirTransport(httpx.AsyncBaseTransport):
             self._patients.append(body)
             self.patient_ids.append(key[1])
             return
-        owner = (resource.get("subject") or resource.get("patient") or {}).get("reference", "")
-        self._by_patient.setdefault((key[0], owner.removeprefix("Patient/")), []).append(body)
+        self._by_patient.setdefault((key[0], owner), []).append(body)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         parts = request.url.path.removeprefix("/fhir/r4").strip("/").split("/")
@@ -75,6 +77,11 @@ class DatasetFhirTransport(httpx.AsyncBaseTransport):
             return _ok(_bundle(self._patients))
         patient = request.url.params.get("patient", "")
         return _ok(_bundle(self._by_patient.get((parts[0], patient), [])))
+
+
+def _owner_of(resource: dict[str, Any]) -> str:
+    reference = (resource.get("subject") or resource.get("patient") or {}).get("reference", "")
+    return str(reference).removeprefix("Patient/")
 
 
 def _bundle(resources: list[bytes]) -> bytes:

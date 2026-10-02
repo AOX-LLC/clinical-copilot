@@ -301,3 +301,34 @@ async def test_a_database_error_in_one_patient_is_counted_and_the_others_continu
 
     assert summary.failures == ["OperationalError"]
     assert summary.patients == 1
+
+
+def _belongs_to_someone_else(resource: dict[str, Any]) -> dict[str, Any]:
+    resource["subject"] = {"reference": f"Patient/{SECOND_PATIENT}"}
+    return resource
+
+
+def _names_no_patient(resource: dict[str, Any]) -> dict[str, Any]:
+    resource.pop("subject")
+    return resource
+
+
+@pytest.mark.parametrize("damage", [_belongs_to_someone_else, _names_no_patient])
+async def test_a_record_that_does_not_name_its_patient_is_never_ingested(
+    migrated_database_url: str, engine: AsyncEngine, damage: Any
+) -> None:
+    crypto = real_crypto(new_key_material())
+    transport = DatasetFhirTransport(patient_limit=SLICE, mutations={LEUKOCYTES: damage})
+
+    summary = await _ingest(migrated_database_url, crypto, transport)
+
+    assert summary.failures == ["IngestError"]
+    assert summary.patients == SLICE - 1
+    # The first patient's records, including the one claiming a stranger, rolled back together.
+    assert await _scalar(engine, "SELECT count(*) FROM patient") == SLICE - 1
+    assert (
+        await _scalar(
+            engine, "SELECT count(*) FROM source_record WHERE resource_id = :id", id=LEUKOCYTES[1]
+        )
+        == 0
+    )
