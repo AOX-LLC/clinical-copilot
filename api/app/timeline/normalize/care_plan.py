@@ -52,4 +52,4 @@ def _plan_concept(resource: Json) -> Concept:
 
 
 def _concept_json(concept: Concept) -> dict[str, str | None]:
-    return {"system": concept.system, "code": concept.code, "display": concept.display}
+    return {"system": concept.system, "code": concept.code, "display": concept.label}

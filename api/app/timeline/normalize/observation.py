@@ -104,7 +104,7 @@ def _value_fields(holder: Json) -> dict[str, Any]:
         text = quantity_text(quantity)
         return {"value_text": text} if text else {}
     if "valueCodeableConcept" in holder:
-        display = first_concept(holder["valueCodeableConcept"]).display
+        display = first_concept(holder["valueCodeableConcept"]).label
         return {"value_text": display} if display else {}
     if isinstance(holder.get("valueString"), str):
         return {"value_text": holder["valueString"]}
