@@ -84,7 +84,7 @@ jobs:
       - name: Forbid compliance claims
         run: |
           # Catches "<law> compliant/certified/ready" (any hyphen) and "compliant with <law>".
-          if git grep -niP 'hipaa[\s\x{2010}\x{2011}-]+(complian|certif|ready)|complian\w*\s+with\s+hipaa'; then
+          if git grep -niP 'hipaa[\s\x{2010}\x{2011}\x{2013}-]+(complian|certif|ready)|complian\w*\s+with\s+(the\s+)?hipaa'; then
             echo "::error::Describe the safeguards; never claim regulatory compliance."
             exit 1
           fi
