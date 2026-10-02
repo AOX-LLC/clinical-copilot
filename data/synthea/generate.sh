@@ -7,6 +7,8 @@
 # directory and compare it with the committed manifest instead of overwriting anything.
 set -euo pipefail
 
+# The release asset published as v4.0.0. Its manifest reports Build-Version v3.4.0-18-ga07a65555;
+# the checksum below is what pins it, not either label (docs/adr/0012-synthetic-dataset.md).
 SYNTHEA_VERSION="v4.0.0"
 SYNTHEA_JAR_SHA256="ed43c20ad40ba5c3bc724503a5af032715fe3c491620b766148e7c2361e6ecc1"
 SYNTHEA_JAR_URL="https://github.com/synthetichealth/synthea/releases/download/${SYNTHEA_VERSION}/synthea-with-dependencies.jar"
