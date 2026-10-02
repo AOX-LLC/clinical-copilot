@@ -34,6 +34,7 @@ class TimelineKind(StrEnum):
     MEDICATION = "medication"
     SUPPLEMENT = "supplement"
     PROTOCOL = "protocol"
+    CARE_PLAN = "care_plan"
     PROCEDURE = "procedure"
     IMMUNIZATION = "immunization"
     ALLERGY = "allergy"

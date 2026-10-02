@@ -116,3 +116,64 @@ def test_downgrade_removes_the_timeline_schema(empty_database_url: str) -> None:
 
     # Alembic runs its own event loop, so this test stays synchronous.
     assert not TIMELINE_TABLES & asyncio.run(_public_tables(empty_database_url))
+
+
+async def _timeline_kinds(database_url: str) -> list[str]:
+    engine = create_async_engine(database_url, poolclass=NullPool)
+    async with engine.connect() as connection:
+        rows = await connection.execute(
+            text("SELECT unnest(enum_range(NULL::timeline_kind))::text AS kind")
+        )
+        kinds = [row.kind for row in rows]
+    await engine.dispose()
+    return kinds
+
+
+async def _insert_care_plan_row(database_url: str) -> None:
+    """One synthetic care-plan timeline row, with the rows it needs, inserted as the owner."""
+    engine = create_async_engine(database_url, poolclass=NullPool)
+    async with engine.begin() as connection:
+        patient_id = await connection.scalar(
+            text("INSERT INTO patient DEFAULT VALUES RETURNING id")
+        )
+        snapshot_id = await connection.scalar(
+            text(
+                "INSERT INTO source_record (id, source_system_id, resource_type, resource_id,"
+                " content_sha256, payload_enc, patient_id)"
+                " SELECT gen_random_uuid(), id, 'CarePlan', 'care-plan-1', decode(repeat('ab', 32),"
+                " 'hex'), '\\x00'::bytea, :patient FROM source_system LIMIT 1 RETURNING id"
+            ),
+            {"patient": patient_id},
+        )
+        await connection.execute(
+            text(
+                "INSERT INTO timeline_event (id, patient_id, source_record_id, kind,"
+                " time_precision, sort_at) VALUES (gen_random_uuid(), :patient, :snapshot,"
+                " 'care_plan', 'unknown', now())"
+            ),
+            {"patient": patient_id, "snapshot": snapshot_id},
+        )
+    await engine.dispose()
+
+
+def test_care_plan_kind_is_added_and_removed_by_migration_0003(empty_database_url: str) -> None:
+    config = alembic_config(empty_database_url)
+
+    command.upgrade(config, "0003")
+    assert "care_plan" in asyncio.run(_timeline_kinds(empty_database_url))
+    command.downgrade(config, "0002")
+    assert "care_plan" not in asyncio.run(_timeline_kinds(empty_database_url))
+    command.upgrade(config, "head")
+
+
+def test_downgrade_refuses_to_drop_the_kind_while_care_plan_rows_exist(
+    empty_database_url: str,
+) -> None:
+    config = alembic_config(empty_database_url)
+    command.upgrade(config, "head")
+    asyncio.run(_insert_care_plan_row(empty_database_url))
+
+    with pytest.raises(RuntimeError, match="care_plan timeline rows exist"):
+        command.downgrade(config, "0002")
+
+    assert "care_plan" in asyncio.run(_timeline_kinds(empty_database_url))
