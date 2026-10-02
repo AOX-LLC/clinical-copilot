@@ -36,3 +36,6 @@ data/local/
 .DS_Store
 .idea/
 .vscode/
+
+# Eval outputs
+evals/out/
