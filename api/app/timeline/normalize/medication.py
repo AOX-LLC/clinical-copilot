@@ -3,7 +3,8 @@
 The dataset inlines each medication into its request (ADR 0012), so a request resolves its
 drug from ``contained``. A reference that cannot be resolved there is an error: a
 normalizer sees one record, and a drug it cannot name is not a timeline row. The dosage
-text is the row's value; the structured dosage is kept in the sealed detail.
+text is the row's value; the structured dosage is kept in the sealed detail. A statement the
+practice categorised as a supplement becomes a ``supplement`` row (ADR 0016).
 """
 
 from collections.abc import Sequence
@@ -24,6 +25,7 @@ from app.timeline.normalize._fhir import (
     instant_of,
     time_choice,
 )
+from app.timeline.normalize.practice import SUPPLEMENT_CATEGORY, has_practice_category
 from app.timeline.vocabulary import TimelineKind
 
 
@@ -70,7 +72,7 @@ def _row(
     return draft(
         ctx,
         path="",
-        kind=TimelineKind.MEDICATION,
+        kind=_kind_of(resource),
         occurred=occurred,
         concept=_drug(resource, ctx),
         period_end=period_end,
@@ -79,6 +81,13 @@ def _row(
         value_text=text,
         detail_json=detail_json({"dosage": instructions} if instructions else None),
     )
+
+
+def _kind_of(resource: Json) -> TimelineKind:
+    """A supplement regimen is a MedicationStatement the practice categorised as one."""
+    if has_practice_category(resource.get("category"), SUPPLEMENT_CATEGORY):
+        return TimelineKind.SUPPLEMENT
+    return TimelineKind.MEDICATION
 
 
 def _drug(resource: Json, ctx: Context) -> Concept:
