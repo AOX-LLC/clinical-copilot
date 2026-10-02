@@ -15,6 +15,7 @@ concurrent run away instead of letting two of them race over the same heads.
 """
 
 import asyncio
+import json
 import logging
 import resource
 import time
@@ -204,6 +205,8 @@ class _PatientIngest:
 
     async def __call__(self, patient: SourcePatient) -> PatientResult:
         records = await _fetch_with_retry(self.adapter, patient.external_id, self.kinds)
+        for record in records:
+            _require_subject(record, patient.external_id)
         projector = build_projector(self.clinic_zone)
         result = PatientResult()
         now = datetime.now(UTC)
@@ -240,6 +243,23 @@ class _PatientIngest:
         result.snapshots_created = sum(item.snapshot_created for item in tally)
         result.heads_moved = sum(item.head_moved for item in tally)
         return result
+
+
+def _require_subject(record: SourceRecord, external_id: str) -> None:
+    """Refuse a record that does not name this patient as its subject.
+
+    Every record is sealed and projected under the patient being ingested. A source that
+    returns another person's record (a loose search, a bug) must fail that patient rather
+    than put the record on this chart.
+    """
+    label = f"{record.resource_type}/{record.resource_id}"
+    try:
+        resource = json.loads(record.payload)
+        reference = (resource.get("subject") or resource.get("patient") or {}).get("reference")
+    except (ValueError, AttributeError, RecursionError):
+        raise IngestError(f"{label} cannot be checked against its patient") from None
+    if not isinstance(reference, str) or reference.split("/")[-2:] != ["Patient", external_id]:
+        raise IngestError(f"{label} does not belong to the patient being ingested")
 
 
 async def _list_patients(adapter: EhrAdapter) -> list[SourcePatient]:
