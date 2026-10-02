@@ -18,6 +18,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "graphql-core==3.2.6",
     "hypothesis==6.168.3",
     "mypy==2.4.0",
     "pytest==9.1.1",

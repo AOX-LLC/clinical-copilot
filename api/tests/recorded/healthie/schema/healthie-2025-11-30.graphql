@@ -1,0 +1,144 @@
+# An excerpt of Healthie's public API reference, used to check this adapter's queries.
+# Source: https://docs.gethealthie.com/reference/2025-11-30 (API version 2025-11-30).
+# Type definitions only, with Healthie's descriptions removed, and only the fields and
+# arguments the adapter uses. It is not Healthie's schema and is not complete.
+# Rebuild with tests/recorded/healthie/schema/build_excerpt.py.
+#
+# Source page of each definition:
+#   User: https://docs.gethealthie.com/reference/2025-11-30/objects/user
+#   MedicationType: https://docs.gethealthie.com/reference/2025-11-30/objects/medicationtype
+#   CarePlan: https://docs.gethealthie.com/reference/2025-11-30/objects/careplan
+#   Document: https://docs.gethealthie.com/reference/2025-11-30/objects/document
+#   PageInfo: https://docs.gethealthie.com/reference/2025-11-30/objects/pageinfo
+#   CarePlanPaginationConnection: https://docs.gethealthie.com/reference/2025-11-30/objects/careplanpaginationconnection
+#   DocumentPaginationConnection: https://docs.gethealthie.com/reference/2025-11-30/objects/documentpaginationconnection
+#   FieldError: https://docs.gethealthie.com/reference/2025-11-30/objects/fielderror
+#   createDocumentPayload: https://docs.gethealthie.com/reference/2025-11-30/objects/createdocumentpayload
+#   createDocumentInput: https://docs.gethealthie.com/reference/2025-11-30/input-objects/createdocumentinput
+#   Query.users: https://docs.gethealthie.com/reference/2025-11-30/queries/users
+#   UserConnection: https://docs.gethealthie.com/reference/2025-11-30/objects/userconnection
+#   Query.user: https://docs.gethealthie.com/reference/2025-11-30/queries/user
+#   Query.medications: https://docs.gethealthie.com/reference/2025-11-30/queries/medications
+#   Query.medication: https://docs.gethealthie.com/reference/2025-11-30/queries/medication
+#   Query.carePlans: https://docs.gethealthie.com/reference/2025-11-30/queries/careplans
+#   Query.carePlan: https://docs.gethealthie.com/reference/2025-11-30/queries/careplan
+#   Query.documents: https://docs.gethealthie.com/reference/2025-11-30/queries/documents
+#   Query.document: https://docs.gethealthie.com/reference/2025-11-30/queries/document
+#   Mutation.createDocument: https://docs.gethealthie.com/reference/2025-11-30/mutations/createdocument
+
+scalar ISO8601Date
+
+scalar ISO8601DateTime
+
+scalar JSON
+
+scalar Cursor
+
+type User {
+  id: ID!
+  first_name: String
+  last_name: String
+  dob: ISO8601Date
+  email: String
+  gender: String
+  active: Boolean!
+  created_at: ISO8601DateTime
+  updated_at: ISO8601DateTime
+}
+
+type MedicationType {
+  id: ID!
+  user_id: ID
+  name: String
+  code: String
+  ndc: String
+  rxcui: String
+  route: String
+  dosage: String
+  frequency: String
+  directions: String
+  comment: String
+  active: Boolean
+  start_date: ISO8601DateTime
+  end_date: ISO8601DateTime
+  metadata: JSON
+  created_at: ISO8601DateTime!
+  updated_at: ISO8601DateTime
+}
+
+type CarePlan {
+  id: ID!
+  name: String
+  description: String
+  is_active: Boolean
+  is_group: Boolean
+  is_hidden: Boolean!
+  is_template: Boolean!
+  patient: User
+  created_at: ISO8601DateTime!
+  updated_at: ISO8601DateTime!
+}
+
+type Document {
+  id: ID!
+  display_name: String
+  description: String
+  rel_user_id: ID
+  include_in_charting: Boolean!
+  metadata: String
+  created_at: ISO8601DateTime!
+}
+
+type PageInfo {
+  end_cursor: Cursor
+  has_next_page: Boolean!
+}
+
+type CarePlanPaginationConnection {
+  nodes: [CarePlan]
+  page_info: PageInfo!
+}
+
+type DocumentPaginationConnection {
+  nodes: [Document]
+  page_info: PageInfo!
+}
+
+type FieldError {
+  field: String
+  message: String!
+}
+
+type createDocumentPayload {
+  document: Document
+  messages: [FieldError]
+}
+
+input createDocumentInput {
+  rel_user_id: ID
+  display_name: String
+  description: String
+  file_string: String
+  include_in_charting: Boolean
+  metadata: String
+}
+
+type UserConnection {
+  nodes: [User]
+  page_info: PageInfo!
+}
+
+type Query {
+  users(after: String, first: Int): UserConnection!
+  user(id: ID): User
+  medications(patient_id: ID, active: Boolean): [MedicationType!]
+  medication(id: ID): MedicationType
+  carePlans(patient_id: ID, after: String, first: Int): CarePlanPaginationConnection
+  carePlan(id: ID): CarePlan
+  documents(private_user_id: String, after: String, first: Int): DocumentPaginationConnection
+  document(id: ID): Document
+}
+
+type Mutation {
+  createDocument(input: createDocumentInput): createDocumentPayload
+}
