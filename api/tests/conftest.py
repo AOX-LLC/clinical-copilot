@@ -22,6 +22,7 @@ from sqlalchemy.pool import NullPool
 from app.db import MIGRATIONS_DIR
 
 ADMIN_URL_VARIABLE = "TEST_DATABASE_ADMIN_URL"
+LIVE_URL_VARIABLE = "LIVE_FHIR_BASE_URL"
 APP_ROLE = "copilot_app"
 MUTABLE_TABLES = (
     "timeline_event",
@@ -34,14 +35,21 @@ MUTABLE_TABLES = (
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    _skip_unless_set(items, "live", LIVE_URL_VARIABLE, "run the live FHIR tests")
     if os.environ.get(ADMIN_URL_VARIABLE):
         return
     if os.environ.get("REQUIRE_DB_TESTS") == "1":
         raise pytest.UsageError(f"REQUIRE_DB_TESTS=1 but {ADMIN_URL_VARIABLE} is not set")
-    skip_db = pytest.mark.skip(reason=f"set {ADMIN_URL_VARIABLE} to run database tests")
+    _skip_unless_set(items, "db", ADMIN_URL_VARIABLE, "run database tests")
+
+
+def _skip_unless_set(items: list[pytest.Item], marker: str, variable: str, purpose: str) -> None:
+    if os.environ.get(variable):
+        return
+    skip = pytest.mark.skip(reason=f"set {variable} to {purpose}")
     for item in items:
-        if "db" in item.keywords:
-            item.add_marker(skip_db)
+        if marker in item.keywords:
+            item.add_marker(skip)
 
 
 def _admin_url() -> URL:
