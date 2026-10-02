@@ -80,6 +80,7 @@ _ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _ERROR_CODE = re.compile(r"[A-Z][A-Z_]{0,39}")
 _SIGNATURE_HEADER = re.compile(r"sig1=([0-9a-f]{64})")
 _DIGEST_HEADER = re.compile(r"SHA-256=([0-9a-f]{64})")
+MIN_WEBHOOK_SECRET_BYTES = 16
 _MAX_CURSOR_CHARS = 512
 _MAX_LOOKUP_PAGES = 20
 _MAX_METADATA_KEY_CHARS = 200
@@ -97,6 +98,22 @@ class HealthieConfig:
     webhook_path: str = ""
     webhook_query: str = ""
     write_back_enabled: bool = False
+    # Only Healthie's own two endpoints are accepted unless this is set, because the API key goes
+    # to whatever the endpoint names. Tests point at a fixture host and set it.
+    allow_custom_endpoint: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.api_key:
+            raise ValueError("the Healthie API key is empty")
+        if self.endpoint not in (PRODUCTION_ENDPOINT, SANDBOX_ENDPOINT) and not (
+            self.allow_custom_endpoint and self.endpoint.startswith("https://")
+        ):
+            raise ValueError("the endpoint must be one of Healthie's own https endpoints")
+        if self.webhook_secret is not None:
+            if len(self.webhook_secret.encode()) < MIN_WEBHOOK_SECRET_BYTES:
+                raise ValueError("the webhook secret is too short to sign anything")
+            if not self.webhook_path.startswith("/"):
+                raise ValueError("a webhook secret needs the path Healthie posts to")
 
 
 @dataclass(frozen=True, slots=True)
