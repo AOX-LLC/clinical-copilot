@@ -138,6 +138,7 @@ def _healthie_harness() -> AdapterHarness:
         webhook_secret="whsec_synthetic-test-secret",
         webhook_path=HEALTHIE_WEBHOOK_PATH,
         write_back_enabled=True,
+        allow_custom_endpoint=True,
     )
     adapter = HealthieAdapter(HEALTHIE_SOURCE, httpx.AsyncClient(transport=transport), config)
     wrong_digest = {"Content-Digest": "SHA-256=" + "0" * 64, "Signature": "sig1=" + "0" * 64}

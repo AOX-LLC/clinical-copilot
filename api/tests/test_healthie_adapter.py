@@ -49,6 +49,7 @@ def make(
         api_key=API_KEY,
         webhook_secret=SECRET,
         webhook_path=PATH,
+        allow_custom_endpoint=True,
         **overrides,  # type: ignore[arg-type]
     )
     client = httpx.AsyncClient(transport=transport or fixture)
@@ -64,6 +65,7 @@ def signed(
             API_KEY,
             webhook_secret=secret,
             webhook_path=adapter_config_path,
+            allow_custom_endpoint=True,
             webhook_query=query,
         ),
         body,
@@ -88,7 +90,11 @@ def test_the_endpoints_and_version_are_the_documented_ones() -> None:
 
 
 def test_the_config_repr_hides_its_secrets() -> None:
-    text = repr(HealthieConfig(ENDPOINT, API_KEY, webhook_secret=SECRET))
+    text = repr(
+        HealthieConfig(
+            ENDPOINT, API_KEY, webhook_secret=SECRET, webhook_path=PATH, allow_custom_endpoint=True
+        )
+    )
 
     assert API_KEY not in text
     assert SECRET not in text
@@ -110,7 +116,9 @@ async def test_every_request_carries_the_documented_headers() -> None:
 async def test_a_refused_key_is_a_permanent_error() -> None:
     fixture = FixtureHealthie()
     client = httpx.AsyncClient(transport=fixture)
-    adapter = HealthieAdapter(SOURCE, client, HealthieConfig(ENDPOINT, "wrong-key"))
+    adapter = HealthieAdapter(
+        SOURCE, client, HealthieConfig(ENDPOINT, "wrong-key", allow_custom_endpoint=True)
+    )
 
     with pytest.raises(PermanentSourceError):
         await adapter.list_patients(None, 2)
@@ -424,7 +432,7 @@ async def test_any_change_to_what_was_signed_is_refused(tamper: str) -> None:
         case "query":
             headers = signed(PATH, body, query="x=1")
         case "secret":
-            headers = signed(PATH, body, secret="whsec_other")
+            headers = signed(PATH, body, secret="whsec_other-synthetic-secret")
         case "digest only":
             headers = {"Content-Digest": headers["Content-Digest"]}
         case "signature only":
@@ -450,7 +458,9 @@ async def test_header_names_are_not_case_sensitive() -> None:
 
 async def test_without_a_secret_notifications_are_unsupported() -> None:
     adapter = HealthieAdapter(
-        SOURCE, httpx.AsyncClient(transport=FixtureHealthie()), HealthieConfig(ENDPOINT, API_KEY)
+        SOURCE,
+        httpx.AsyncClient(transport=FixtureHealthie()),
+        HealthieConfig(ENDPOINT, API_KEY, allow_custom_endpoint=True),
     )
 
     assert not (await adapter.capabilities()).supports_notifications
@@ -591,3 +601,48 @@ async def test_write_back_will_not_guess_when_it_cannot_rule_out_an_earlier_writ
 
     with pytest.raises(PermanentSourceError, match="earlier write"):
         await adapter.write_back(document(), "key-1")
+
+
+@pytest.mark.parametrize("secret", ["", "short", "x" * 15])
+def test_a_webhook_secret_too_short_to_sign_anything_is_refused(secret: str) -> None:
+    with pytest.raises(ValueError, match="webhook secret"):
+        HealthieConfig(
+            ENDPOINT, API_KEY, webhook_secret=secret, webhook_path=PATH, allow_custom_endpoint=True
+        )
+
+
+@pytest.mark.parametrize("path", ["", "webhooks/healthie"])
+def test_a_webhook_secret_needs_the_path_that_was_signed(path: str) -> None:
+    with pytest.raises(ValueError, match="path"):
+        HealthieConfig(
+            ENDPOINT, API_KEY, webhook_secret=SECRET, webhook_path=path, allow_custom_endpoint=True
+        )
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://api.gethealthie.com/graphql",
+        "https://healthie.fixture.invalid/graphql",  # not Healthie's, and not allowed
+        "http://169.254.169.254/latest",
+        "",
+    ],
+)
+def test_the_api_key_is_only_sent_to_healthies_own_endpoints(endpoint: str) -> None:
+    with pytest.raises(ValueError, match="endpoint"):
+        HealthieConfig(endpoint, API_KEY)
+
+
+def test_a_custom_endpoint_still_has_to_be_https() -> None:
+    with pytest.raises(ValueError, match="endpoint"):
+        HealthieConfig("http://localhost/graphql", API_KEY, allow_custom_endpoint=True)
+
+
+def test_healthies_two_endpoints_are_accepted() -> None:
+    HealthieConfig(PRODUCTION_ENDPOINT, API_KEY)
+    HealthieConfig(SANDBOX_ENDPOINT, API_KEY)
+
+
+def test_an_empty_api_key_is_refused() -> None:
+    with pytest.raises(ValueError, match="API key"):
+        HealthieConfig(PRODUCTION_ENDPOINT, "")
