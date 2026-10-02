@@ -23,7 +23,9 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U copilot_owner -d clinical_copilot"]
+      # Over TCP on purpose: on first start the image runs a temporary server that listens on
+      # the Unix socket only, and a socket check passes against it while migrate is refused.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U copilot_owner -d clinical_copilot"]
       interval: 5s
       timeout: 3s
       retries: 20
