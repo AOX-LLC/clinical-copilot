@@ -24,7 +24,7 @@ from app.timeline.normalize.observation import project_observation
 from app.timeline.normalize.patient import project_patient
 from app.timeline.normalize.procedure import project_procedure
 
-__all__ = ["NormalizationError", "build_projector"]
+__all__ = ["NormalizationError", "build_projector", "parse_resource"]
 
 Normalizer = Callable[[Json, Context], Sequence[TimelineEventDraft]]
 
