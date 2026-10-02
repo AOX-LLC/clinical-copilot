@@ -9,7 +9,7 @@ Status: Accepted. Supersedes the loader sentence in [0002](0002-fhir-server-and-
 | Behavior | Result |
 | --- | --- |
 | `PUT Type/<id>` with a client-assigned id | Works. 201 on create, 200 on update. `versionId` goes up on every PUT and restarts at 1 after a server restart. |
-| Transaction bundle of PUT entries | Works. All 14,266 resources load in a few seconds. A transaction with one invalid entry returned 422 and stored none of its entries, so transactions are atomic. |
+| Transaction bundle of PUT entries | Works. All 13,994 resources of the dataset (286 shared, 13,708 in patient bundles) load in a few seconds. A transaction with one invalid entry returned 422 and stored none of its entries, so transactions are atomic. |
 | Search by `patient` for the nine clinical types | Works and is complete. No result was truncated; the largest single result was 2,860 observations. |
 | `_count` | Truncates the result but returns no `next` link, so there is no server-side paging. Without `_count`, every match comes back. |
 | `_lastUpdated` | Not usable. Comparisons behave as if timestamps were cut to whole seconds, and a `gt` with a `+00:00` offset matched everything. It cannot express "strictly after" at the precision a source record carries. |
