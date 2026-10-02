@@ -40,13 +40,20 @@ def content_sha256(payload: bytes, source_kind: SourceKind) -> bytes:
 def canonical_json(payload: bytes, source_kind: SourceKind) -> bytes:
     document = _parse_object(payload)
     stripped = _STRIPPERS[source_kind](document)
-    return _serialize(stripped).encode("utf-8")
+    try:
+        return _serialize(stripped).encode("utf-8")
+    except RecursionError as error:
+        raise CanonicalizationError("payload is nested too deeply") from error
+    except UnicodeEncodeError as error:
+        raise CanonicalizationError("payload contains an unpaired surrogate") from error
 
 
 def _parse_object(payload: bytes) -> dict[str, Any]:
     try:
+        # Decode strictly first: json.loads would also accept UTF-16 and a BOM.
+        text = payload.decode("utf-8")
         document = json.loads(
-            payload,
+            text,
             parse_float=_NumberToken,
             parse_int=_NumberToken,
             parse_constant=_reject_constant,
@@ -54,6 +61,8 @@ def _parse_object(payload: bytes) -> dict[str, Any]:
         )
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise CanonicalizationError("payload is not valid UTF-8 JSON") from error
+    except RecursionError as error:
+        raise CanonicalizationError("payload is nested too deeply") from error
     if not isinstance(document, dict):
         raise CanonicalizationError("payload must be a JSON object")
     return document

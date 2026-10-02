@@ -231,3 +231,39 @@ async def test_payload_content_never_reaches_logs_errors_or_reprs(
 
     assert any(SENTINEL_FAMILY_NAME.encode() in record.payload for record in records)
     assert not [text for text in surfaced_text if SENTINEL_FAMILY_NAME in text]
+
+
+async def test_a_page_size_below_one_is_refused(harness: AdapterHarness) -> None:
+    with pytest.raises(ValueError, match="page_size"):
+        await harness.adapter.list_patients(None, page_size=0)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b'{"events": "abc"}', id="events not a list"),
+        pytest.param(b'{"events": [1]}', id="event not an object"),
+        pytest.param(
+            b'{"events": [{"event_type": "updated", "resource_id": "x"}]}',
+            id="missing resource type",
+        ),
+        pytest.param(b"not json", id="not json"),
+    ],
+)
+async def test_a_signed_but_malformed_notification_is_a_typed_error(
+    harness: AdapterHarness, body: bytes
+) -> None:
+    if not (await harness.adapter.capabilities()).supports_notifications:
+        pytest.skip("adapter declares no notifications")
+
+    with pytest.raises(PermanentSourceError):
+        harness.adapter.parse_notification(harness.sign_notification(body), body)
+
+
+async def test_a_non_ascii_signature_is_rejected_not_crashed(harness: AdapterHarness) -> None:
+    if not (await harness.adapter.capabilities()).supports_notifications:
+        pytest.skip("adapter declares no notifications")
+    body = b'{"events": []}'
+
+    with pytest.raises(SignatureInvalidError):
+        harness.adapter.parse_notification({"x-fake-signature": "\u00e9" * 64}, body)

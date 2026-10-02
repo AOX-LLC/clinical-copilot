@@ -109,6 +109,10 @@ def test_non_ascii_text_is_kept_as_utf8() -> None:
         pytest.param(b'{"a": NaN}', id="non-standard constant"),
         pytest.param(b'{"a": ', id="truncated"),
         pytest.param(b"\xff\xfe", id="not utf-8"),
+        pytest.param('{"a": 1}'.encode("utf-16"), id="utf-16"),
+        pytest.param(b'\xef\xbb\xbf{"a": 1}', id="utf-8 byte order mark"),
+        pytest.param(b'{"a": "\\ud800"}', id="unpaired surrogate"),
+        pytest.param(b'{"a": ' + b"[" * 100_000 + b"]" * 100_000 + b"}", id="nested too deep"),
     ],
 )
 def test_ambiguous_or_invalid_payloads_are_rejected(payload: bytes) -> None:

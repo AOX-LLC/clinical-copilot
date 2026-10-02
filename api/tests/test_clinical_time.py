@@ -6,6 +6,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from app.timeline.clinical_time import (
+    ClinicalTime,
     ClinicalTimeError,
     clinic_calendar_date,
     parse_fhir_datetime,
@@ -128,3 +129,13 @@ def test_errors_and_reprs_never_echo_the_clinical_time() -> None:
 
     assert "1970" not in str(raised.value)
     assert "1970" not in repr(parsed)
+
+
+def test_only_ascii_digits_are_accepted() -> None:
+    with pytest.raises(ClinicalTimeError):
+        parse_fhir_datetime("\u0662\u0660\u0662\u0664-\u0660\u0661-\u0661\u0665")
+
+
+def test_unknown_precision_is_not_a_clinical_time() -> None:
+    with pytest.raises(ClinicalTimeError):
+        ClinicalTime(TimePrecision.UNKNOWN, None, date(2026, 1, 1), "2026")

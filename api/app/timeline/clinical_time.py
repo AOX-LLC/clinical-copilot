@@ -14,14 +14,15 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 
-from app.timeline.vocabulary import TimePrecision
+from app.timeline.vocabulary import CALENDAR_PRECISIONS, TimePrecision
 
 _FHIR_DATETIME = re.compile(
     r"(?P<year>\d{4})"
     r"(?:-(?P<month>\d{2})"
     r"(?:-(?P<day>\d{2})"
     r"(?:T(?P<clock>\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?)(?P<offset>Z|[+-]\d{2}:\d{2})?)?"
-    r")?)?"
+    r")?)?",
+    re.ASCII,  # \d must not match other scripts' digits
 )
 
 
@@ -43,6 +44,9 @@ class ClinicalTime:
                 raise ClinicalTimeError("an instant needs a datetime and no calendar date")
             if self.instant.utcoffset() != UTC.utcoffset(None):
                 raise ClinicalTimeError("instants are stored in UTC")
+        elif self.precision not in CALENDAR_PRECISIONS:
+            # An unknown time is represented by having no ClinicalTime at all.
+            raise ClinicalTimeError(f"{self.precision.value} is not a stated precision")
         elif self.calendar_date is None or self.instant is not None:
             raise ClinicalTimeError("a calendar-precision time needs a date and no datetime")
 
