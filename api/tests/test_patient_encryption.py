@@ -19,14 +19,16 @@ from app.crypto.errors import DecryptionError, KeyUnavailableError
 from app.crypto.keyring import FieldSealer, KeyRing, KeyWrapper
 from app.crypto.keystore import KeyStore, destroy_patient_key
 from app.timeline.ingest import SealContext
-from app.timeline.models import DataKey, PatientBlindIndex
+from app.timeline.models import DataKey, Patient, PatientBlindIndex
 from app.timeline.patient_identity import (
+    LinkRaceError,
     PatientIdentifier,
     PatientIdentity,
     create_patient,
     find_patients,
     read_identity,
     replace_identity,
+    resolve_source_patient,
 )
 from tests.conftest import APP_ROLE
 
@@ -549,3 +551,85 @@ def test_no_production_code_constructs_the_test_sealer() -> None:
     ]
 
     assert offenders == []
+
+
+async def _resolve(
+    engine: AsyncEngine, crypto: Crypto, external_id: str, identity: PatientIdentity
+) -> tuple[uuid.UUID, bool]:
+    async with _session(engine) as session:
+        return await resolve_source_patient(
+            session, 1, external_id, identity, crypto.keystore, crypto.sealer, crypto.indexer
+        )
+
+
+async def _identity_columns(engine: AsyncEngine, patient_id: uuid.UUID) -> tuple[object, ...]:
+    async with _session(engine) as session:
+        row = await session.execute(
+            text(
+                "SELECT given_name_enc, family_name_enc, birth_date_enc, identifiers_enc"
+                " FROM patient WHERE id = :id"
+            ),
+            {"id": patient_id},
+        )
+        return tuple(row.one())
+
+
+async def test_a_source_patient_is_created_once_and_found_by_its_link(
+    engine: AsyncEngine, crypto: Crypto
+) -> None:
+    first, created_first = await _resolve(engine, crypto, "ext-1", ABE)
+    sealed_before = await _identity_columns(engine, first)
+    second, created_second = await _resolve(engine, crypto, "ext-1", ABE)
+
+    assert (created_first, created_second) == (True, False)
+    assert first == second
+    assert await _identity_columns(engine, first) == sealed_before, "the identity was re-sealed"
+    async with _session(engine) as session:
+        assert await session.scalar(select(func.count()).select_from(Patient)) == 1
+
+
+async def test_resolving_again_in_a_new_process_loads_the_existing_key(
+    engine: AsyncEngine, secrets: tuple[bytes, bytes]
+) -> None:
+    patient_id, _ = await _resolve(engine, _crypto(*secrets), "ext-1", ABE)
+
+    fresh = _crypto(*secrets)
+    again, created = await _resolve(engine, fresh, "ext-1", ABE)
+
+    assert (again, created) == (patient_id, False)
+    async with _session(engine) as session:
+        assert (await read_identity(session, patient_id, fresh.sealer)).family_name == (
+            SENTINEL_FAMILY_NAME
+        )
+
+
+async def test_two_source_patients_with_the_same_identity_are_not_merged(
+    engine: AsyncEngine, crypto: Crypto
+) -> None:
+    first, _ = await _resolve(engine, crypto, "ext-1", ABE)
+    second, created = await _resolve(engine, crypto, "ext-2", ABE)
+
+    assert created
+    assert first != second
+
+
+async def test_a_lost_link_race_rolls_the_duplicate_patient_back(
+    engine: AsyncEngine, secrets: tuple[bytes, bytes]
+) -> None:
+    winner = _crypto(*secrets)
+    async with AsyncSession(engine) as first_session, first_session.begin():
+        await first_session.execute(text(f"SET LOCAL ROLE {APP_ROLE}"))
+        await resolve_source_patient(
+            first_session, 1, "ext-1", ABE, winner.keystore, winner.sealer, winner.indexer
+        )
+        # The second run cannot see the uncommitted link, creates its own patient, and
+        # waits on the link's primary key until the first run commits.
+        loser = asyncio.create_task(_resolve(engine, _crypto(*secrets), "ext-1", ABE))
+        await asyncio.sleep(0.5)
+        assert not loser.done()
+
+    with pytest.raises(LinkRaceError):
+        await loser
+
+    async with _session(engine) as session:
+        assert await session.scalar(select(func.count()).select_from(Patient)) == 1
