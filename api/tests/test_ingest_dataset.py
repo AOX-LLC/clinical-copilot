@@ -140,7 +140,9 @@ async def test_every_record_of_every_patient_is_ingested(
     assert await _count(owner_engine, "SELECT count(*) FROM data_key") == 28
 
 
-async def test_snapshots_per_resource_type_match_the_dataset(owner_engine: AsyncEngine) -> None:
+async def test_snapshots_per_resource_type_match_the_dataset(
+    ingested: Ingested, owner_engine: AsyncEngine
+) -> None:
     async with owner_engine.connect() as connection:
         rows = await connection.execute(
             text("SELECT resource_type, count(*) AS n FROM source_record GROUP BY 1")
@@ -225,12 +227,13 @@ async def test_each_patients_identity_round_trips(
     assert checked == 28
 
 
-def _identifying_values(*, names_only: bool = False) -> set[bytes]:
+def _identifying_values(*, plaintext_columns: bool = False) -> set[bytes]:
     """Every name, birth date and identifier of every seeded patient, as UTF-8 bytes.
 
-    ``names_only`` leaves out birth dates and identifiers: the timeline's plaintext times can
-    legitimately contain a birth date, and Synthea uses a patient's id as their record number,
-    which the source link and the snapshot's resource id hold in plaintext by design.
+    ``plaintext_columns`` is the set that must not appear in a plaintext column: names, and
+    identifiers other than a patient's own id. Birth dates are left out because the timeline's
+    plaintext times can legitimately contain one. Synthea uses a patient's id as one of their
+    record numbers, and the source link and resource id hold that id in plaintext by design.
     """
     values: set[str] = set()
     for resources in patient_resources():
@@ -239,9 +242,13 @@ def _identifying_values(*, names_only: bool = False) -> set[bytes]:
             values.update(name.get("given", []))
             values.add(name["family"])
             values.add(" ".join([*name.get("given", []), name["family"]]))
-        if not names_only:
+        if not plaintext_columns:
             values.add(patient["birthDate"])
-            values.update(item["value"] for item in patient["identifier"])
+        values.update(
+            item["value"]
+            for item in patient["identifier"]
+            if not plaintext_columns or item["value"] != patient["id"]
+        )
         for extension in patient.get("extension", []):
             if "valueString" in extension:  # the mother's maiden name
                 values.add(extension["valueString"])
@@ -323,10 +330,10 @@ async def test_the_scan_would_find_plaintext_if_it_were_there(
     assert sum(1 for needle in needles if needle in plaintext) >= 4
 
 
-async def test_no_patient_name_is_in_a_plaintext_column(
+async def test_no_patient_name_or_private_identifier_is_in_a_plaintext_column(
     ingested: Ingested, owner_engine: AsyncEngine
 ) -> None:
-    needles = _identifying_values(names_only=True)
+    needles = _identifying_values(plaintext_columns=True)
     blobs = await _column_blobs(owner_engine, "%", as_text=True)
 
     assert "timeline_event.code_display" in blobs
