@@ -81,7 +81,12 @@ def _report(summary: IngestSummary) -> None:
         summary.seconds,
         summary.peak_rss_mib,
     )
-    logger.info("records by type: %s", by_type)
+    logger.info(
+        "records by type: %s; reading the source %.1f s and writing %.1f s, summed over patients",
+        by_type,
+        summary.fetch_seconds,
+        summary.write_seconds,
+    )
     if summary.failures:
         logger.error("%d patients failed", len(summary.failures))
 
