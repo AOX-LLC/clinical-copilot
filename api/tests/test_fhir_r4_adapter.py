@@ -151,6 +151,10 @@ async def test_failures_map_to_typed_errors(
         pytest.param({"Retry-After": "7"}, 7.0, id="seconds"),
         pytest.param({}, None, id="absent"),
         pytest.param({"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}, None, id="a date"),
+        pytest.param({"Retry-After": "inf"}, None, id="infinite"),
+        pytest.param({"Retry-After": "nan"}, None, id="not a number"),
+        pytest.param({"Retry-After": "1e9"}, fhir_r4.MAX_RETRY_AFTER_SECONDS, id="absurdly long"),
+        pytest.param({"Retry-After": "-5"}, 0.0, id="negative"),
     ],
 )
 async def test_throttling_carries_the_retry_hint_when_there_is_one(
