@@ -3,6 +3,7 @@
 import gzip
 import json
 from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,8 @@ from app.fhir_seed.__main__ import MANIFEST_FILE, prepare_dataset
 from app.fhir_seed.load import PATIENT_DIRECTORY, SHARED_FILE, load_dataset, patient_files
 from app.fhir_seed.transform import SeedError
 
+PRACTICE_SEED = 7
+REFERENCE_DATE = date(2026, 9, 1)
 PRACTITIONER_ID = "22222222-0000-4000-8000-000000000001"
 SENTINEL_FAMILY_NAME = "Quillfeather-Sentinel"
 
@@ -72,7 +75,7 @@ def raw_directory(tmp_path: Path) -> Path:
 @pytest.fixture
 def dataset(raw_directory: Path, tmp_path: Path) -> Path:
     prepared = tmp_path / "dataset"
-    prepare_dataset(raw_directory, prepared)
+    prepare_dataset(raw_directory, prepared, PRACTICE_SEED, REFERENCE_DATE)
     return prepared
 
 
@@ -136,8 +139,8 @@ def test_prepare_is_reproducible_and_the_manifest_hashes_decompressed_content(
 ) -> None:
     first, second = tmp_path / "first", tmp_path / "second"
 
-    prepare_dataset(raw_directory, first)
-    prepare_dataset(raw_directory, second)
+    prepare_dataset(raw_directory, first, PRACTICE_SEED, REFERENCE_DATE)
+    prepare_dataset(raw_directory, second, PRACTICE_SEED, REFERENCE_DATE)
 
     assert (first / MANIFEST_FILE).read_text() == (second / MANIFEST_FILE).read_text()
     for path in (first / PATIENT_DIRECTORY).glob("*.json.gz"):
@@ -149,12 +152,12 @@ def test_prepare_removes_bundles_left_by_an_earlier_population(
     raw_directory: Path, tmp_path: Path
 ) -> None:
     out = tmp_path / "dataset"
-    prepare_dataset(raw_directory, out)
+    prepare_dataset(raw_directory, out, PRACTICE_SEED, REFERENCE_DATE)
     stale = out / PATIENT_DIRECTORY / "99999999-0000-4000-8000-000000000009.json.gz"
     stale.write_bytes(b"left over from a larger population")
     (out / "README.md").write_text("kept: not a generated file")
 
-    prepare_dataset(raw_directory, out)
+    prepare_dataset(raw_directory, out, PRACTICE_SEED, REFERENCE_DATE)
 
     assert not stale.exists()
     assert (out / "README.md").exists()
@@ -167,7 +170,7 @@ def test_prepare_refuses_a_directory_without_shared_and_patient_bundles(tmp_path
     empty.mkdir()
 
     with pytest.raises(SeedError, match="shared and patient bundles"):
-        prepare_dataset(empty, tmp_path / "out")
+        prepare_dataset(empty, tmp_path / "out", PRACTICE_SEED, REFERENCE_DATE)
 
 
 async def test_the_shared_bundle_loads_first_then_each_patient_as_one_put_transaction(

@@ -19,6 +19,9 @@ SEED="20260901"
 CLINICIAN_SEED="20260901"
 REFERENCE_DATE="20260901"   # yyyymmdd: "today" for the simulation
 POPULATION="20"             # living patients; deaths during the simulation come on top
+# Seed of the practice generator that adds supplement regimens and protocols (ADR 0016). Its
+# catalog and rules are in api/app/fhir_seed/practice.py; the manifest pins what they produce.
+PRACTICE_SEED="20260902"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
@@ -61,7 +64,8 @@ if [[ "$mode" == "check" ]]; then
   target="$work/prepared"
 fi
 mkdir -p "$target"
-(cd "$repo/api" && uv run --frozen python -m app.fhir_seed prepare "$work/raw/fhir" "$target")
+(cd "$repo/api" && uv run --frozen python -m app.fhir_seed prepare "$work/raw/fhir" "$target" \
+  --practice-seed "$PRACTICE_SEED" --reference-date "$REFERENCE_DATE")
 
 if [[ "$mode" == "check" ]]; then
   if diff --brief "$target/MANIFEST.sha256" "$here/MANIFEST.sha256" > /dev/null; then

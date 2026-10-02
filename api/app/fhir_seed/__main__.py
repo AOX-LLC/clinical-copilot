@@ -1,6 +1,8 @@
 """Command line for the synthetic dataset.
 
-    python -m app.fhir_seed prepare RAW_DIR OUT_DIR   trim Synthea output into the committed dataset
+    python -m app.fhir_seed prepare RAW_DIR OUT_DIR --practice-seed N --reference-date YYYYMMDD
+        trim Synthea output into the committed dataset, adding the practice's supplements
+        and protocols
     python -m app.fhir_seed load DATA_DIR             load the dataset into the FHIR server
 
 ``load`` reads the server address from ``FHIR_BASE_URL`` and exits non-zero on any failure.
@@ -15,6 +17,7 @@ import logging
 import os
 import sys
 from collections.abc import Sequence
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +29,7 @@ from app.fhir_seed.load import (
     SHARED_FILE,
     load_dataset,
 )
+from app.fhir_seed.practice import add_practice_data
 from app.fhir_seed.transform import SeedError, trim_bundle
 
 DEFAULT_FHIR_BASE_URL = "http://fhir:5826/fhir/r4"
@@ -42,7 +46,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         if arguments.command == "prepare":
-            prepare_dataset(arguments.raw_dir, arguments.out_dir)
+            prepare_dataset(
+                arguments.raw_dir,
+                arguments.out_dir,
+                arguments.practice_seed,
+                arguments.reference_date,
+            )
         else:
             asyncio.run(_load(arguments.data_dir))
     except SeedError as error:
@@ -57,6 +66,13 @@ def _build_parser() -> argparse.ArgumentParser:
     prepare = commands.add_parser("prepare", help="trim raw Synthea output into the dataset")
     prepare.add_argument("raw_dir", type=Path)
     prepare.add_argument("out_dir", type=Path)
+    prepare.add_argument("--practice-seed", type=int, required=True)
+    prepare.add_argument(
+        "--reference-date",
+        type=lambda text: datetime.strptime(text, "%Y%m%d").date(),
+        required=True,
+        help="yyyymmdd: the date the practice's regimens are dated against",
+    )
     load = commands.add_parser("load", help="load the dataset into the FHIR server")
     load.add_argument("data_dir", type=Path)
     return parser
@@ -69,8 +85,12 @@ async def _load(data_dir: Path) -> None:
     logger.info("seeded %d patients, %d resources", summary.patients, summary.resources)
 
 
-def prepare_dataset(raw_dir: Path, out_dir: Path) -> None:
-    """Write the trimmed dataset as reproducible gzip files plus a checksum manifest."""
+def prepare_dataset(raw_dir: Path, out_dir: Path, practice_seed: int, reference_date: date) -> None:
+    """Write the trimmed dataset as reproducible gzip files plus a checksum manifest.
+
+    Each patient bundle also gets the practice's supplement regimens and protocols (ADR 0016),
+    a pure function of ``practice_seed`` and ``reference_date``.
+    """
     raw_files = sorted(raw_dir.glob("*.json"))
     shared_files = [path for path in raw_files if SHARED_MARKER in path.name]
     patient_raw_files = [path for path in raw_files if SHARED_MARKER not in path.name]
@@ -90,7 +110,7 @@ def prepare_dataset(raw_dir: Path, out_dir: Path) -> None:
         {"resourceType": "Bundle", "type": "transaction", "entry": shared_entries},
     )
     for path in patient_raw_files:
-        bundle = trim_bundle(_read_json(path))
+        bundle = add_practice_data(trim_bundle(_read_json(path)), practice_seed, reference_date)
         patient_id = _patient_id(bundle)
         _write_reproducible(out_dir / PATIENT_DIRECTORY / f"{patient_id}.json.gz", bundle)
     _write_manifest(out_dir)
