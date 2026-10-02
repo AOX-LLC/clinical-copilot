@@ -518,3 +518,35 @@ def test_the_end_of_an_onset_window_is_not_the_end_of_the_condition(
     assert row.occurred is not None
     assert row.occurred.calendar_date == date(2020, 1, 1)
     assert row.period_end is None
+
+
+@pytest.mark.parametrize(
+    ("resource_type", "resource_id", "field"),
+    [
+        ("Condition", ACTIVE_CONDITION, "code"),
+        ("Procedure", PROCEDURE, "code"),
+        ("Immunization", IMMUNIZATION, "vaccineCode"),
+        ("AllergyIntolerance", ALLERGY, "code"),
+        ("MedicationRequest", INLINE_MEDICATION, "medicationCodeableConcept"),
+        ("Observation", LEUKOCYTES, "code"),
+    ],
+)
+def test_clinician_free_text_never_reaches_a_plaintext_column(
+    resource_type: str, resource_id: str, field: str
+) -> None:
+    resource = dataset_resource(resource_type, resource_id)
+    resource[field] = {"text": SENTINEL_FAMILY_NAME}
+
+    (row,) = project_resource(resource)
+
+    assert row.code_display is None
+    assert row.code is None
+    assert SENTINEL_FAMILY_NAME not in (row.code_system, row.status, row.ref_text, row.value_unit)
+    assert detail(row)["code_text"] == SENTINEL_FAMILY_NAME
+
+
+def test_a_codings_own_display_stays_a_plaintext_label() -> None:
+    (row,) = project("Condition", ACTIVE_CONDITION)
+
+    assert row.code_display == "Received higher education (finding)"
+    assert "code_text" not in detail(row)

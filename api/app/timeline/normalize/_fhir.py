@@ -33,9 +33,17 @@ class NormalizationError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class Concept:
+    """A coded concept. ``display`` is the coding's own label and may sit in a plaintext column;
+    ``text`` is the free text a clinician typed, which only a sealed column may hold."""
+
     system: str | None
     code: str | None
     display: str | None
+    text: str | None = None
+
+    @property
+    def label(self) -> str | None:
+        return self.display or self.text
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,13 +66,13 @@ def parse_resource(payload: bytes, label: str) -> Json:
 
 
 def first_concept(codeable: Any) -> Concept:
-    """The first coding of a CodeableConcept; its text stands in for a missing display."""
+    """The first coding of a CodeableConcept, and its free text kept apart from the display."""
     if not isinstance(codeable, dict):
         return Concept(None, None, None)
     codings = codeable.get("coding") or [{}]
     coding = codings[0] if isinstance(codings[0], dict) else {}
     return Concept(
-        coding.get("system"), coding.get("code"), coding.get("display") or codeable.get("text")
+        coding.get("system"), coding.get("code"), coding.get("display"), codeable.get("text")
     )
 
 
@@ -174,6 +182,11 @@ def draft(
         sort_at = ctx.source_updated_at
     else:
         raise NormalizationError(f"{ctx.label} has no time to place it on the timeline")
+    if concept.display is None and concept.text:
+        # Free text is not a label for a plaintext column: it goes where sealed detail goes.
+        fields["detail_json"] = detail_json(
+            {**json.loads(fields.get("detail_json") or b"{}"), "code_text": concept.text}
+        )
     return TimelineEventDraft(
         source_path=path,
         kind=kind,
