@@ -45,14 +45,19 @@ def project_observation(resource: Json, ctx: Context) -> Sequence[TimelineEventD
         "recorded_at": instant_of(ctx, "issued", resource.get("issued")),
         "status": resource.get("status"),
     }
-    components = [c for c in resource.get("component") or [] if isinstance(c, dict)]
+    # Positions count in the source list, so a path names the component it came from.
+    components = [
+        (index, component)
+        for index, component in enumerate(resource.get("component") or [])
+        if isinstance(component, dict)
+    ]
     drafts: list[TimelineEventDraft] = []
     own_value = _value_fields(resource)
     if own_value or not components:
         drafts.append(
             _row(ctx, "", resource, first_concept(resource.get("code")), own_value, shared)
         )
-    for index, component in enumerate(components):
+    for index, component in components:
         drafts.append(
             _row(
                 ctx,
@@ -110,7 +115,7 @@ def _value_fields(holder: Json) -> dict[str, Any]:
         return {"value_text": holder["valueString"]}
     if isinstance(holder.get("valueBoolean"), bool):
         return {"value_text": "true" if holder["valueBoolean"] else "false"}
-    if isinstance(holder.get("valueInteger"), int):
+    if isinstance(holder.get("valueInteger"), int) and not isinstance(holder["valueInteger"], bool):
         return {"value_numeric": Decimal(holder["valueInteger"])}
     return {}
 

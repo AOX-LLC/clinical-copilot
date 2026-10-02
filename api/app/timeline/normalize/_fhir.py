@@ -143,7 +143,12 @@ def ucum_quantity(quantity: Any) -> tuple[Decimal, str] | None:
     if not isinstance(quantity, dict) or quantity.get("comparator"):
         return None
     value, code = quantity.get("value"), quantity.get("code")
-    if quantity.get("system") != UCUM or not code or not isinstance(value, int | Decimal):
+    if (
+        quantity.get("system") != UCUM
+        or not code
+        or isinstance(value, bool)
+        or not isinstance(value, int | Decimal)
+    ):
         return None
     return Decimal(value), code
 

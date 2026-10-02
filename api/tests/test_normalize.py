@@ -590,3 +590,40 @@ def test_a_reference_range_whose_bounds_are_out_of_order_keeps_only_its_text() -
     (row,) = project_resource(resource)
 
     assert (row.ref_low, row.ref_high, row.ref_text) == (None, None, "11-4")
+
+
+def test_a_boolean_is_never_an_integer_value() -> None:
+    resource = dataset_resource("Observation", LEUKOCYTES)
+    resource.pop("valueQuantity")
+    resource["valueInteger"] = True
+
+    (row,) = project_resource(resource)
+
+    assert row.value_numeric is None
+
+
+def test_a_component_path_names_its_position_in_the_source() -> None:
+    resource = dataset_resource("Observation", BLOOD_PRESSURE)
+    resource["component"].insert(0, "not an object")
+
+    rows = project_resource(resource)
+
+    assert [row.source_path for row in rows] == ["component[1]", "component[2]"]
+
+
+@pytest.mark.parametrize(
+    "birth_date", ["19800101", "1980-W01-1", "1980", "1980-05", "1980-05-17T10:00:00Z"]
+)
+def test_a_birth_date_that_is_not_a_full_fhir_date_is_refused(birth_date: str) -> None:
+    resource = dataset_resource("Patient", PATIENT)
+    resource["birthDate"] = birth_date
+
+    with pytest.raises(NormalizationError, match="birth date"):
+        identity_from_fhir_patient(resource, "Patient/x")
+
+
+def test_a_full_birth_date_is_read_as_that_calendar_date() -> None:
+    resource = dataset_resource("Patient", PATIENT)
+    resource["birthDate"] = "1980-05-17"
+
+    assert identity_from_fhir_patient(resource, "Patient/x").birth_date == date(1980, 5, 17)
