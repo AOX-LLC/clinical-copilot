@@ -52,5 +52,8 @@ ignore_missing_imports = true
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-markers = ["db: needs a Postgres reachable through TEST_DATABASE_ADMIN_URL"]
+markers = [
+    "db: needs a Postgres reachable through TEST_DATABASE_ADMIN_URL",
+    "live: needs the running stack, with its FHIR server at LIVE_FHIR_BASE_URL",
+]
 addopts = "-ra --strict-markers"

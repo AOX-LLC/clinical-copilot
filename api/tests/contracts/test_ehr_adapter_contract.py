@@ -1,19 +1,24 @@
 """The behavior every EHR adapter must show, whatever system it talks to.
 
-Each adapter joins the suite by adding a harness to ``HARNESS_FACTORIES``. Phase 1
-runs the in-memory fake; the FHIR R4 and Healthie adapters join with recorded fixtures.
+Each adapter joins the suite by adding a harness to ``HARNESS_FACTORIES``. The in-memory
+fake and the FHIR R4 adapter over recorded responses run by default. ``fhir-live`` runs the
+same suite against the running stack and is skipped unless ``LIVE_FHIR_BASE_URL`` is set;
+the Healthie adapter joins with its own recorded fixtures.
 """
 
 import base64
 import json
 import logging
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import httpx
 import pytest
 
+from app.ehr.fhir_r4 import FhirR4Adapter
 from app.ehr.ports import (
     ApprovedSummaryDocument,
     EhrAdapter,
@@ -23,11 +28,18 @@ from app.ehr.ports import (
     RecordNotFoundError,
     SignatureInvalidError,
     SourceRecord,
+    SourceSystemRef,
 )
 from app.timeline.canonical import content_sha256
+from app.timeline.vocabulary import SourceKind
 from tests.fixtures import SENTINEL_FAMILY_NAME, populated_fake_adapter
+from tests.recorded.replay import BASE_URL, ReplayTransport, ThrottlingTransport
 
 MAX_PAGES = 100
+LIVE_URL_VARIABLE = "LIVE_FHIR_BASE_URL"
+FHIR_SOURCE = SourceSystemRef(code="fhir-local", kind=SourceKind.FHIR_R4)
+# A synthetic patient from the committed dataset, recorded for the offline run and read live.
+CONTRACT_PATIENT_ID = "3b680a6c-b15d-ef35-a863-b733f0230d9d"
 
 
 @dataclass
@@ -52,10 +64,47 @@ def _fake_harness() -> AdapterHarness:
     )
 
 
-HARNESS_FACTORIES: dict[str, Callable[[], AdapterHarness]] = {"fake": _fake_harness}
+def _fhir_harness(
+    transport: ThrottlingTransport, base_url: str, patient_id: str, sentinel: str
+) -> AdapterHarness:
+    client = httpx.AsyncClient(base_url=base_url, transport=transport, timeout=60.0)
+    return AdapterHarness(
+        adapter=FhirR4Adapter(FHIR_SOURCE, client),
+        patient_external_id=patient_id,
+        throttle_next_call=transport.throttle_next_call,
+        sign_notification=lambda _body: {},
+        payload_sentinel=sentinel,
+    )
 
 
-@pytest.fixture(params=sorted(HARNESS_FACTORIES))
+def _fhir_recorded_harness() -> AdapterHarness:
+    replay = ReplayTransport()
+    sentinel = replay.family_names[CONTRACT_PATIENT_ID]
+    transport = ThrottlingTransport(replay)
+    return _fhir_harness(transport, BASE_URL, CONTRACT_PATIENT_ID, sentinel)
+
+
+def _fhir_live_harness() -> AdapterHarness:
+    base_url = os.environ[LIVE_URL_VARIABLE]
+    patient = httpx.get(f"{base_url}/Patient/{CONTRACT_PATIENT_ID}", timeout=30.0).json()
+    transport = ThrottlingTransport(httpx.AsyncHTTPTransport())
+    sentinel = patient["name"][0]["family"]
+    return _fhir_harness(transport, base_url, CONTRACT_PATIENT_ID, sentinel)
+
+
+HARNESS_FACTORIES: dict[str, Callable[[], AdapterHarness]] = {
+    "fake": _fake_harness,
+    "fhir-recorded": _fhir_recorded_harness,
+    "fhir-live": _fhir_live_harness,
+}
+
+
+@pytest.fixture(
+    params=[
+        pytest.param(name, marks=pytest.mark.live) if name.endswith("-live") else name
+        for name in sorted(HARNESS_FACTORIES)
+    ]
+)
 def harness(request: pytest.FixtureRequest) -> AdapterHarness:
     return HARNESS_FACTORIES[request.param]()
 
