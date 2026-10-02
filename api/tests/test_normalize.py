@@ -550,3 +550,43 @@ def test_a_codings_own_display_stays_a_plaintext_label() -> None:
 
     assert row.code_display == "Received higher education (finding)"
     assert "code_text" not in detail(row)
+
+
+def _range(low: int, high: int, **qualifier: Any) -> dict[str, Any]:
+    ucum = "http://unitsofmeasure.org"
+    return {
+        "low": {"value": low, "code": "10*3/uL", "system": ucum},
+        "high": {"value": high, "code": "10*3/uL", "system": ucum},
+        "text": f"{low}-{high}",
+        **qualifier,
+    }
+
+
+@pytest.mark.parametrize(
+    "ranges",
+    [
+        [_range(4, 11), _range(5, 15)],
+        [_range(4, 11, appliesTo=[{"text": "pregnant"}])],
+        [_range(4, 11, age={"low": {"value": 18}})],
+        [_range(4, 11, age={"low": {"value": 18}}), _range(5, 15)],
+    ],
+    ids=["two ranges", "qualified by appliesTo", "qualified by age", "one qualified, one not"],
+)
+def test_a_range_that_may_be_for_another_population_is_not_attached(
+    ranges: list[dict[str, Any]],
+) -> None:
+    resource = dataset_resource("Observation", LEUKOCYTES)
+    resource["referenceRange"] = ranges
+
+    (row,) = project_resource(resource)
+
+    assert (row.ref_low, row.ref_high, row.ref_text) == (None, None, None)
+
+
+def test_a_reference_range_whose_bounds_are_out_of_order_keeps_only_its_text() -> None:
+    resource = dataset_resource("Observation", LEUKOCYTES)
+    resource["referenceRange"] = [_range(11, 4)]
+
+    (row,) = project_resource(resource)
+
+    assert (row.ref_low, row.ref_high, row.ref_text) == (None, None, "11-4")
