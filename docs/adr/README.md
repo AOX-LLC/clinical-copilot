@@ -18,3 +18,4 @@ Each record states one decision, why it was made, and what it costs. Records are
 | [0012](0012-synthetic-dataset.md) | A pinned, trimmed Synthea dataset, committed | Accepted |
 | [0013](0013-fhir-seeding-and-adapter-limits.md) | Seed fhir-candle with PUT transactions, and adapt to what it cannot do | Accepted |
 | [0014](0014-field-encryption-implementation.md) | How field encryption is built: key layout, blind indexes and what is not yet wired | Accepted |
+| [0015](0015-timeline-ingest-and-normalization.md) | How ingest and normalization work: what is projected, what is skipped, and how a run behaves | Accepted |
