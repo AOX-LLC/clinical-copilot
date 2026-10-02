@@ -433,3 +433,33 @@ def test_list_items_that_are_not_objects_are_ignored_not_errors() -> None:
     assert len(project_resource(blood_pressure)) == 2
     (row,) = project_resource(medication)
     assert row.value_text is None
+
+
+@pytest.mark.parametrize("comparator", ["<", "<=", ">=", ">"])
+def test_a_qualified_quantity_is_text_never_a_number(comparator: str) -> None:
+    resource = dataset_resource("Observation", LEUKOCYTES)
+    resource["valueQuantity"] = {
+        "value": 5,
+        "comparator": comparator,
+        "unit": "mg/dL",
+        "code": "mg/dL",
+        "system": "http://unitsofmeasure.org",
+    }
+
+    (row,) = project_resource(resource)
+
+    assert row.value_numeric is None
+    assert row.value_unit is None
+    assert row.value_text == f"{comparator}5 mg/dL"
+
+
+def test_a_reference_bound_with_a_comparator_is_not_a_number() -> None:
+    resource = dataset_resource("Observation", LEUKOCYTES)
+    ucum = "http://unitsofmeasure.org"
+    resource["referenceRange"] = [
+        {"high": {"value": 5, "comparator": "<", "code": "10*3/uL", "system": ucum}, "text": "<5"}
+    ]
+
+    (row,) = project_resource(resource)
+
+    assert (row.ref_low, row.ref_high, row.ref_text) == (None, None, "<5")
