@@ -1,0 +1,19 @@
+{
+  "note": "Hand-built synthetic records shaped from Healthie's public API reference. Not a recording.",
+  "users": [
+    {"id": "9001", "first_name": "Ada", "last_name": "Quillfeather-Healthie", "dob": "1980-02-29", "email": "ada.quillfeather@example.invalid", "gender": "Female", "active": true, "created_at": "2025-01-10T09:00:00-05:00", "updated_at": "2026-03-01T10:15:00-05:00"},
+    {"id": "9002", "first_name": "Bram", "last_name": "Tolliver-Healthie", "dob": "1975-11-03", "email": "bram.tolliver@example.invalid", "gender": "Male", "active": true, "created_at": "2025-02-14T14:30:00-05:00", "updated_at": "2026-02-20 08:00:00 -0500"},
+    {"id": "9003", "first_name": "Cleo", "last_name": "Marchetti-Healthie", "dob": "1990-07-21", "email": "cleo.marchetti@example.invalid", "gender": "Female", "active": true, "created_at": "2025-06-01T11:00:00-04:00", "updated_at": "2026-01-05T16:45:00-05:00"}
+  ],
+  "medications": [
+    {"id": "7101", "user_id": "9001", "name": "Vitamin D3", "code": null, "ndc": null, "rxcui": null, "route": "Oral", "dosage": "5000 IU", "frequency": "Once daily", "directions": "Take with a meal", "comment": null, "active": true, "start_date": "2026-01-15T00:00:00-05:00", "end_date": null, "metadata": {"category": "supplement"}, "created_at": "2026-01-15T10:00:00-05:00", "updated_at": "2026-01-15T10:00:00-05:00"},
+    {"id": "7102", "user_id": "9001", "name": "Magnesium glycinate", "code": null, "ndc": null, "rxcui": null, "route": "Oral", "dosage": "200 mg", "frequency": "At bedtime", "directions": null, "comment": "Reduce if loose stools", "active": true, "start_date": "2026-01-15T00:00:00-05:00", "end_date": null, "metadata": {"category": "supplement"}, "created_at": "2026-01-15T10:05:00-05:00", "updated_at": "2026-02-01T09:00:00-05:00"},
+    {"id": "7103", "user_id": "9002", "name": "Omega-3 fish oil", "code": null, "ndc": null, "rxcui": null, "route": "Oral", "dosage": "1000 mg", "frequency": "Twice daily", "directions": null, "comment": null, "active": false, "start_date": "2025-09-01T00:00:00-04:00", "end_date": "2026-01-31T00:00:00-05:00", "metadata": null, "created_at": "2025-09-01T12:00:00-04:00", "updated_at": "2026-02-01T08:30:00-05:00"}
+  ],
+  "care_plans": [
+    {"id": "8201", "patient_id": "9001", "name": "Foundational micronutrient protocol", "description": "Synthetic protocol: replete, then maintain.", "is_active": true, "is_group": false, "is_hidden": false, "is_template": false, "created_at": "2026-01-15T10:30:00-05:00", "updated_at": "2026-02-10T13:00:00-05:00"},
+    {"id": "8202", "patient_id": "9001", "name": "Sleep support protocol", "description": null, "is_active": false, "is_group": false, "is_hidden": false, "is_template": false, "created_at": "2025-11-01T10:30:00-04:00", "updated_at": "2026-01-02T10:00:00-05:00"},
+    {"id": "8203", "patient_id": "9002", "name": "Recovery protocol", "description": "Synthetic protocol.", "is_active": true, "is_group": false, "is_hidden": false, "is_template": false, "created_at": "2025-12-01T09:00:00-05:00", "updated_at": "2025-12-01T09:00:00-05:00"}
+  ],
+  "documents": []
+}
