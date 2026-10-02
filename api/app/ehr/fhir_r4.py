@@ -49,6 +49,7 @@ CHANGES_PAGE_SIZE = 100
 MAX_RETRY_AFTER_SECONDS = 300.0
 SNAPSHOT_SECONDS = 300.0
 MAX_SNAPSHOTS = 4
+REMEMBERED_ENDINGS = 64
 
 # The FHIR resource types behind each record kind this adapter can fetch.
 RESOURCE_TYPES_BY_KIND: dict[RecordKind, tuple[str, ...]] = {
@@ -70,6 +71,13 @@ READ_RESOURCE_TYPES = frozenset(
 # ``Patient/.`` would become the search-all request ``Patient``.
 _FHIR_ID = re.compile(r"(?!\.+$)[A-Za-z0-9\-.]{1,64}")
 _SNAPSHOT_ID = re.compile(r"[0-9a-f]{32}")
+_ENDING_MESSAGES = {
+    "expired": f"the paging snapshot expired after {SNAPSHOT_SECONDS:.0f} s unused; "
+    "start the listing again",
+    "evicted": "the paging snapshot was evicted by newer listings; start the listing again",
+    "unknown": "no paging snapshot matches this cursor (the listing finished, or the cursor "
+    "was never issued); start the listing again",
+}
 _now = time.monotonic
 
 
@@ -77,7 +85,7 @@ _now = time.monotonic
 class _Snapshot:
     key: tuple[object, ...]
     items: list[Any]
-    taken_at: float
+    last_used: float
 
 
 class _Number(str):
@@ -91,6 +99,7 @@ class FhirR4Adapter:
         self._source = source
         self._client = client
         self._snapshots: dict[str, _Snapshot] = {}
+        self._endings: dict[str, str] = {}  # why recent snapshots are gone, for the error message
 
     @property
     def source(self) -> SourceSystemRef:
@@ -187,24 +196,33 @@ class FhirR4Adapter:
         return Page(items=tuple(page), next_cursor=_encode_cursor(snapshot_id, next_offset))
 
     def _remember(self, snapshot_id: str, snapshot: _Snapshot) -> None:
-        self._snapshots = {
-            known_id: known
-            for known_id, known in self._snapshots.items()
-            if snapshot.taken_at - known.taken_at < SNAPSHOT_SECONDS
-        }
+        """Keep a new snapshot, dropping idle ones first and then the least recently used."""
+        for known_id, known in list(self._snapshots.items()):
+            if snapshot.last_used - known.last_used >= SNAPSHOT_SECONDS:
+                self._end(known_id, "expired")
         while len(self._snapshots) >= MAX_SNAPSHOTS:
-            oldest = min(self._snapshots, key=lambda known_id: self._snapshots[known_id].taken_at)
-            del self._snapshots[oldest]
+            least_recent = min(self._snapshots, key=lambda known: self._snapshots[known].last_used)
+            self._end(least_recent, "evicted")
         self._snapshots[snapshot_id] = snapshot
 
     def _recall(self, snapshot_id: str, key: tuple[object, ...]) -> _Snapshot:
+        """The snapshot for a cursor; using it renews its lifetime, so a slow walk survives."""
         snapshot = self._snapshots.get(snapshot_id)
-        if snapshot is None or _now() - snapshot.taken_at >= SNAPSHOT_SECONDS:
-            self._snapshots.pop(snapshot_id, None)
-            raise RetryableSourceError("the paging snapshot expired; start the listing again")
+        if snapshot is not None and _now() - snapshot.last_used >= SNAPSHOT_SECONDS:
+            self._end(snapshot_id, "expired")
+            snapshot = None
+        if snapshot is None:
+            raise RetryableSourceError(_ENDING_MESSAGES[self._endings.get(snapshot_id, "unknown")])
         if snapshot.key != key:
             raise PermanentSourceError("cursor belongs to a different listing")
+        snapshot.last_used = _now()
         return snapshot
+
+    def _end(self, snapshot_id: str, reason: str) -> None:
+        self._snapshots.pop(snapshot_id, None)
+        self._endings[snapshot_id] = reason
+        while len(self._endings) > REMEMBERED_ENDINGS:
+            del self._endings[next(iter(self._endings))]
 
     async def _records_of_type(self, resource_type: str, patient_id: str) -> list[SourceRecord]:
         if resource_type == "Patient":
