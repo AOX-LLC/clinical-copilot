@@ -41,6 +41,7 @@ Healthie exposes a GraphQL API and webhooks. This phase builds the adapter, its 
 ## Open items
 - **No Healthie normalizers.** Medications, care plans and patients from Healthie are not turned into timeline rows, and ingest is configured for FHIR only. A Healthie record reaching it would raise "no normalizer".
 - **No webhook route.** The adapter verifies and parses; nothing serves a webhook endpoint yet, and mounting one needs a signature-authenticated route in the auth design.
+- **The `medications` default.** The query is sent without its `active` argument. If Healthie answers with active medications only by default (not verified), stopped ones would be missing from a listing and, once Healthie records reach ingest, tombstoned instead of shown as stopped. Pass the argument explicitly, or confirm the default, before Healthie normalizers are built.
 - **Live verification.** Timestamp shape, `file_string` encoding, signature length semantics, the shape of Healthie's errors and whether a care plan's `patient` is reachable the way the excerpt says, all wait for a Healthie account.
 
 ## Consequences
