@@ -7,8 +7,10 @@ text is the row's value; the structured dosage is kept in the sealed detail.
 """
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
+from app.timeline.clinical_time import ClinicalTime
 from app.timeline.ingest import TimelineEventDraft
 from app.timeline.normalize._fhir import (
     Concept,
@@ -58,9 +60,9 @@ def _row(
     ctx: Context,
     resource: Json,
     *,
-    occurred: Any,
-    period_end: Any,
-    recorded_at: Any,
+    occurred: ClinicalTime | None,
+    period_end: ClinicalTime | None,
+    recorded_at: datetime | None,
     dosage: Any,
 ) -> TimelineEventDraft:
     instructions = [d for d in dosage or [] if isinstance(d, dict)]

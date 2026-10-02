@@ -3,9 +3,11 @@
 from collections.abc import Sequence
 from datetime import date
 
+from app.timeline.clinical_time import ClinicalTimeError, parse_fhir_datetime
 from app.timeline.ingest import TimelineEventDraft
 from app.timeline.normalize._fhir import Context, Json, NormalizationError
 from app.timeline.patient_identity import PatientIdentifier, PatientIdentity
+from app.timeline.vocabulary import TimePrecision
 
 BIRTH_SEX_URL = "http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex"
 SEX_BY_BIRTHSEX = {"M": "male", "F": "female"}
@@ -45,10 +47,13 @@ def _birth_date(resource: Json, label: str) -> date | None:
     if raw is None:
         return None
     try:
-        return date.fromisoformat(raw)
-    except (TypeError, ValueError):
+        parsed = parse_fhir_datetime(raw)
+    except (ClinicalTimeError, TypeError):
+        raise NormalizationError(f"{label} has a birth date that is not a FHIR date") from None
+    if parsed.precision is not TimePrecision.DAY or parsed.calendar_date is None:
         # A year or a month alone is a valid FHIR date but no calendar date to look up by.
-        raise NormalizationError(f"{label} has a birth date that is not a full date") from None
+        raise NormalizationError(f"{label} has a birth date that is not a full date")
+    return parsed.calendar_date
 
 
 def _sex_at_birth(resource: Json) -> str:
