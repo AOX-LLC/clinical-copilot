@@ -119,8 +119,11 @@ def time_choice(
 
 
 def ucum_quantity(quantity: Any) -> tuple[Decimal, str] | None:
-    """(value, UCUM code) of a quantity, or None when it has no comparable UCUM unit."""
-    if not isinstance(quantity, dict):
+    """(value, UCUM code) of a quantity, or None when it is not an exact number in a UCUM unit.
+
+    A quantity with a comparator ("<5", ">=200") states a bound, not a value; it stays text.
+    """
+    if not isinstance(quantity, dict) or quantity.get("comparator"):
         return None
     value, code = quantity.get("value"), quantity.get("code")
     if quantity.get("system") != UCUM or not code or not isinstance(value, int | Decimal):
@@ -133,7 +136,8 @@ def quantity_text(quantity: dict[str, Any]) -> str | None:
     if value is None:
         return None
     unit = quantity.get("unit") or quantity.get("code")
-    return f"{value} {unit}" if unit else str(value)
+    bound = f"{quantity['comparator']}{value}" if quantity.get("comparator") else str(value)
+    return f"{bound} {unit}" if unit else bound
 
 
 def detail_json(detail: Any) -> bytes | None:
