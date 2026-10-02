@@ -6,11 +6,12 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.crypto.runtime import FieldCrypto
 from app.ingest import run as ingest_run
 from app.ingest.run import run_ingest
+from app.timeline.ingest import tombstone_head
 from tests.dataset import patient_resources
 from tests.dataset_server import DatasetFhirTransport
 from tests.ingest_support import (
@@ -228,3 +229,40 @@ def _everything() -> set[tuple[str, str]]:
         for r in resources
         if r["resourceType"] != "Patient"
     }
+
+
+async def test_a_head_that_moved_after_it_was_read_is_not_tombstoned(
+    migrated_database_url: str, engine: AsyncEngine
+) -> None:
+    # Two patients ingest at once and a record moves between them: one transaction read the head
+    # while it still pointed at the old snapshot, and the other has since re-pointed it.
+    crypto = real_crypto(new_key_material())
+    await _ingest(migrated_database_url, crypto, _source())
+    stale_snapshot = await _scalar(
+        engine,
+        "SELECT id FROM source_record WHERE resource_type = :t AND resource_id = :i",
+        t=ONE_MEDICATION[0],
+        i=ONE_MEDICATION[1],
+    )
+
+    def edited(resource: dict[str, Any]) -> dict[str, Any]:
+        resource["status"] = "stopped"
+        return resource
+
+    await _ingest(migrated_database_url, crypto, _source(mutations={ONE_MEDICATION: edited}))
+    source_system_id = await _scalar(
+        engine, "SELECT id FROM source_system WHERE code = 'fhir-local'"
+    )
+
+    async with (
+        app_role_engine(migrated_database_url) as app_engine,
+        AsyncSession(app_engine) as session,
+        session.begin(),
+    ):
+        tombstoned = await tombstone_head(
+            session, source_system_id, *ONE_MEDICATION, stale_snapshot, datetime.now(UTC)
+        )
+
+    assert tombstoned is False
+    assert await _tombstoned(engine) == []
+    assert await _current_rows_of(engine, *ONE_MEDICATION) == 1

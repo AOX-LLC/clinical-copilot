@@ -383,15 +383,42 @@ async def tombstone_unseen(
         )
     ).all()
     gone = [row for row in current if (row.resource_type, row.resource_id) not in seen]
+    tombstoned = 0
     for row in gone:
-        await session.execute(
-            update(SourceResourceHead)
-            .where(
-                SourceResourceHead.source_system_id == source_system_id,
-                SourceResourceHead.resource_type == row.resource_type,
-                SourceResourceHead.resource_id == row.resource_id,
-            )
-            .values(deleted_at=now)
+        tombstoned += await tombstone_head(
+            session, source_system_id, row.resource_type, row.resource_id, row.source_record_id, now
         )
-        await _supersede_rows_of(session, row.source_record_id, now)
-    return len(gone)
+    return tombstoned
+
+
+async def tombstone_head(
+    session: AsyncSession,
+    source_system_id: int,
+    resource_type: str,
+    resource_id: str,
+    snapshot_id: uuid.UUID,
+    now: datetime,
+) -> bool:
+    """Tombstone one head, only if it still points at the snapshot it was read with.
+
+    Patients are ingested concurrently, so a record that moved to another patient may have had
+    its head re-pointed (and its tombstone cleared) after this transaction read it. The update
+    waits for that transaction's lock, then re-checks its conditions, so a head that has moved
+    on matches nothing and is left alone.
+    """
+    tombstoned = await session.scalar(
+        update(SourceResourceHead)
+        .where(
+            SourceResourceHead.source_system_id == source_system_id,
+            SourceResourceHead.resource_type == resource_type,
+            SourceResourceHead.resource_id == resource_id,
+            SourceResourceHead.source_record_id == snapshot_id,
+            SourceResourceHead.deleted_at.is_(None),
+        )
+        .values(deleted_at=now)
+        .returning(SourceResourceHead.resource_id)
+    )
+    if tombstoned is None:
+        return False
+    await _supersede_rows_of(session, snapshot_id, now)
+    return True
