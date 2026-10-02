@@ -65,6 +65,9 @@ class KeyRing:
     def add(self, owner: uuid.UUID | None, key: bytes) -> None:
         self._keys[owner] = key
 
+    def discard(self, owner: uuid.UUID | None) -> None:
+        self._keys.pop(owner, None)
+
     def get(self, owner: uuid.UUID | None) -> bytes:
         try:
             return self._keys[owner]
