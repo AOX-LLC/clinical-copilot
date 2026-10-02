@@ -145,6 +145,23 @@ def test_prepare_is_reproducible_and_the_manifest_hashes_decompressed_content(
     assert len((first / MANIFEST_FILE).read_text().splitlines()) == 3
 
 
+def test_prepare_removes_bundles_left_by_an_earlier_population(
+    raw_directory: Path, tmp_path: Path
+) -> None:
+    out = tmp_path / "dataset"
+    prepare_dataset(raw_directory, out)
+    stale = out / PATIENT_DIRECTORY / "99999999-0000-4000-8000-000000000009.json.gz"
+    stale.write_bytes(b"left over from a larger population")
+    (out / "README.md").write_text("kept: not a generated file")
+
+    prepare_dataset(raw_directory, out)
+
+    assert not stale.exists()
+    assert (out / "README.md").exists()
+    assert len(patient_files(out)) == 2
+    assert len((out / MANIFEST_FILE).read_text().splitlines()) == 3
+
+
 def test_prepare_refuses_a_directory_without_shared_and_patient_bundles(tmp_path: Path) -> None:
     empty = tmp_path / "empty"
     empty.mkdir()
