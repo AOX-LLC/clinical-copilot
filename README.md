@@ -33,7 +33,7 @@ Prerequisite: Docker with Compose v2.
 
 ```sh
 cp .env.example .env    # then set the two passwords and the two keys (see the file)
-docker compose up -d --wait
+docker compose up -d --build --wait    # --build: a plain up reuses an old API image after code changes
 ```
 
 | Service     | Port |
