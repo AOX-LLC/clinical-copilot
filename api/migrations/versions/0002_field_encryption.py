@@ -54,6 +54,10 @@ def upgrade() -> None:
             "(wrapped_key IS NULL) = (destroyed_at IS NOT NULL)",
             name=op.f("ck_data_key_key_present_unless_destroyed"),
         ),
+        sa.CheckConstraint(
+            "wrapped_key IS NULL OR octet_length(wrapped_key) = 60",
+            name=op.f("ck_data_key_wrapped_key_has_wrapped_length"),
+        ),
     )
     op.create_index(
         "ux_data_key_one_system_key",

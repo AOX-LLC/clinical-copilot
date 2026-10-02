@@ -210,6 +210,14 @@ def test_a_wrapped_key_unwraps_only_for_its_owner_and_kek_version() -> None:
         KeyWrapper(os.urandom(32), kek_version=1).unwrap(wrapped, PATIENT_A)
 
 
+@pytest.mark.parametrize("length", [0, 11, 12, 59, 61])
+def test_a_stored_key_of_the_wrong_length_is_a_typed_error(length: int) -> None:
+    wrapper = KeyWrapper(os.urandom(32), kek_version=1)
+
+    with pytest.raises(KeyUnavailableError, match="wrong length"):
+        wrapper.unwrap(os.urandom(length), PATIENT_A)
+
+
 def test_rotating_the_kek_rewraps_the_data_key_and_leaves_field_ciphertext_alone() -> None:
     old, new = KeyWrapper(os.urandom(32), 1), KeyWrapper(os.urandom(32), 2)
     data_key = generate_data_key()

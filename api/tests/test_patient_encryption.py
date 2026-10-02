@@ -370,6 +370,17 @@ async def test_loading_many_keys_costs_one_query_for_the_lookup(
     assert len(statements) == 1
 
 
+async def test_a_stored_key_of_the_wrong_length_is_refused_by_the_database(
+    engine: AsyncEngine,
+) -> None:
+    with pytest.raises(IntegrityError, match="wrapped_key_has_wrapped_length"):
+        await _as_owner(
+            engine,
+            "INSERT INTO data_key (kek_version, wrapped_key) VALUES (1, :short)",
+            short=os.urandom(10),
+        )
+
+
 async def test_a_key_cannot_be_marked_destroyed_while_it_is_still_stored(
     engine: AsyncEngine, crypto: Crypto
 ) -> None:

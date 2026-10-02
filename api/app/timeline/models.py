@@ -131,6 +131,10 @@ class DataKey(Base):
             "(wrapped_key IS NULL) = (destroyed_at IS NOT NULL)",
             name="key_present_unless_destroyed",
         ),
+        CheckConstraint(
+            "wrapped_key IS NULL OR octet_length(wrapped_key) = 60",
+            name="wrapped_key_has_wrapped_length",
+        ),
         # NULL patients never collide under a plain unique constraint; this allows one system key.
         Index(
             "ux_data_key_one_system_key",

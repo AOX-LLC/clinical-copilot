@@ -13,11 +13,12 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from app.crypto import cipher
-from app.crypto.cipher import KEY_BYTES, NONCE_BYTES
+from app.crypto.cipher import KEY_BYTES, NONCE_BYTES, TAG_BYTES
 from app.crypto.errors import KeyUnavailableError
 from app.timeline.ingest import SealContext
 
 _WRAP_DOMAIN = b"clinical-copilot/wrap\x00"
+WRAPPED_KEY_BYTES = NONCE_BYTES + KEY_BYTES + TAG_BYTES
 SYSTEM_OWNER = "system"
 
 
@@ -37,6 +38,8 @@ class KeyWrapper:
         return nonce + self._aead.encrypt(nonce, data_key, self._associated_data(owner))
 
     def unwrap(self, wrapped: bytes, owner: uuid.UUID | None) -> bytes:
+        if len(wrapped) != WRAPPED_KEY_BYTES:
+            raise KeyUnavailableError("a stored data key has the wrong length")
         nonce, ciphertext = wrapped[:NONCE_BYTES], wrapped[NONCE_BYTES:]
         try:
             return self._aead.decrypt(nonce, ciphertext, self._associated_data(owner))
