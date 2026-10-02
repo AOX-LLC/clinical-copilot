@@ -125,6 +125,7 @@ async def test_a_record_that_comes_back_is_current_again_without_a_new_snapshot(
 
     assert back.snapshots_created == 0
     assert back.tombstoned == 0
+    assert back.revived == 1
     assert await _tombstoned(engine) == []
     assert await _current_rows_of(engine, *ONE_MEDICATION) == 1
     # A revived row is sealed again under a fresh nonce, so its ciphertext differs; every
