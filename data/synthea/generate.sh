@@ -5,6 +5,7 @@
 # The same inputs give the same data, so the committed files only change when an input
 # below changes. Run `data/synthea/generate.sh --check` to regenerate into a scratch
 # directory and compare it with the committed manifest instead of overwriting anything.
+# A regeneration that changes the data also changes expected-counts.json: the api tests say by how much.
 set -euo pipefail
 
 # The release asset published as v4.0.0. Its manifest reports Build-Version v3.4.0-18-ga07a65555;

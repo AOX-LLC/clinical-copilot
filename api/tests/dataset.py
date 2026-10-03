@@ -14,20 +14,14 @@ from tests.fixtures import FAKE_SOURCE
 DATASET_DIRECTORY = Path(__file__).resolve().parents[2] / "data" / "synthea"
 PATIENT_FILES = sorted((DATASET_DIRECTORY / "patients").glob("*.json.gz"))
 
-# Resources per type in the committed dataset: ADR 0015's 13,708 plus the 95 resources the practice
-# generator adds (ADR 0016).
-RESOURCE_COUNTS = {
-    "Patient": 28,
-    "Encounter": 789,
-    "Condition": 695,
-    "Observation": 8910,
-    "MedicationRequest": 855,
-    "Procedure": 2202,
-    "Immunization": 147,
-    "AllergyIntolerance": 12,
-    "CarePlan": 92,  # 70 from Synthea and 22 practice protocols
-    "MedicationStatement": 73,  # all practice supplements
-}
+# What the dataset holds and what ingest projects from it. The stack-smoke CI job reads the same
+# file, so the tests here and the running stack are held to one set of numbers.
+_EXPECTED = json.loads((DATASET_DIRECTORY / "expected-counts.json").read_text(encoding="utf-8"))
+PATIENT_COUNT: int = _EXPECTED["patients"]
+RESOURCE_COUNTS: dict[str, int] = _EXPECTED["resources_by_type"]
+TIMELINE_COUNTS: dict[str, int] = _EXPECTED["timeline_rows_by_kind"]
+RESOURCE_TOTAL = sum(RESOURCE_COUNTS.values())
+TIMELINE_TOTAL = sum(TIMELINE_COUNTS.values())
 
 
 def patient_resources() -> Iterator[list[dict[str, Any]]]:
