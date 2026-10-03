@@ -15,7 +15,9 @@ from app.timeline.normalize import NormalizationError, build_projector
 from app.timeline.normalize.patient import identity_from_fhir_patient
 from app.timeline.vocabulary import TimelineKind, TimePrecision
 from tests.dataset import (
+    PATIENT_COUNT,
     RESOURCE_COUNTS,
+    TIMELINE_COUNTS,
     count_by_type,
     dataset_record,
     dataset_resource,
@@ -64,9 +66,9 @@ def detail(row: TimelineEventDraft) -> dict[str, Any]:
     return decoded
 
 
-def test_the_dataset_counts_match_adrs_0012_and_0016() -> None:
+def test_the_dataset_holds_the_expected_resources() -> None:
     assert dict(count_by_type()) == RESOURCE_COUNTS
-    assert sum(RESOURCE_COUNTS.values()) == 13_803
+    assert RESOURCE_COUNTS["Patient"] == PATIENT_COUNT
 
 
 def test_encounter_spans_its_period() -> None:
@@ -374,15 +376,13 @@ def test_a_row_with_no_time_at_all_is_refused() -> None:
         project_resource(resource)
 
 
-def test_every_resource_in_the_dataset_projects_without_error() -> None:
-    from tests.dataset import patient_resources
-
-    produced = 0
+def test_every_resource_in_the_dataset_projects_to_the_expected_rows() -> None:
+    produced: Counter[str] = Counter()
     for resources in patient_resources():
         for resource in resources:
-            produced += len(project_resource(resource))
+            produced.update(row.kind.value for row in project_resource(resource))
 
-    assert produced == 13_034
+    assert dict(produced) == TIMELINE_COUNTS
 
 
 def _read(resource: dict[str, Any]) -> object:

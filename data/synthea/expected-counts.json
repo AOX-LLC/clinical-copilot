@@ -1,0 +1,29 @@
+{
+  "_about": "What the committed dataset holds and what ingest projects from it (ADRs 0012, 0015, 0016). The unit and database tests check these numbers against the dataset; the stack-smoke CI job checks them against a freshly ingested stack. Update them in the same commit as any change to the dataset or a normalizer.",
+  "patients": 28,
+  "resources_by_type": {
+    "AllergyIntolerance": 12,
+    "CarePlan": 92,
+    "Condition": 695,
+    "Encounter": 789,
+    "Immunization": 147,
+    "MedicationRequest": 855,
+    "MedicationStatement": 73,
+    "Observation": 8910,
+    "Patient": 28,
+    "Procedure": 2202
+  },
+  "timeline_rows_by_kind": {
+    "allergy": 12,
+    "care_plan": 70,
+    "condition": 695,
+    "encounter": 789,
+    "immunization": 147,
+    "lab": 6385,
+    "medication": 855,
+    "procedure": 2202,
+    "protocol": 22,
+    "supplement": 73,
+    "vital": 1784
+  }
+}

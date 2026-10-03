@@ -24,7 +24,14 @@ from app.timeline.ingest import SealContext
 from app.timeline.patient_identity import read_identity
 from app.timeline.vocabulary import ImportStatus
 from tests.conftest import alembic_config, temporary_database
-from tests.dataset import RESOURCE_COUNTS, patient_resources
+from tests.dataset import (
+    PATIENT_COUNT,
+    RESOURCE_COUNTS,
+    RESOURCE_TOTAL,
+    TIMELINE_COUNTS,
+    TIMELINE_TOTAL,
+    patient_resources,
+)
 from tests.dataset_server import DatasetFhirTransport
 from tests.ingest_support import (
     adapter_over,
@@ -37,20 +44,6 @@ from tests.ingest_support import (
 pytestmark = [pytest.mark.db, pytest.mark.asyncio(loop_scope="module")]
 
 CLINIC_ZONE = ZoneInfo("America/New_York")
-# Timeline rows per kind that the dataset yields (ADRs 0015 and 0016).
-TIMELINE_COUNTS = {
-    "lab": 6385,
-    "vital": 1784,
-    "medication": 855,
-    "procedure": 2202,
-    "encounter": 789,
-    "condition": 695,
-    "immunization": 147,
-    "allergy": 12,
-    "care_plan": 70,
-    "supplement": 73,
-    "protocol": 22,
-}
 MIN_NEEDLE_BYTES = 5  # a shorter needle would match random ciphertext by chance
 
 
@@ -130,16 +123,16 @@ async def test_every_record_of_every_patient_is_ingested(
 
     assert summary.status is ImportStatus.SUCCEEDED
     assert summary.failures == []
-    assert summary.patients == 28
-    assert summary.patients_created == 28
+    assert summary.patients == PATIENT_COUNT
+    assert summary.patients_created == PATIENT_COUNT
     assert summary.records_by_type == Counter(RESOURCE_COUNTS)
-    assert summary.records_seen == sum(RESOURCE_COUNTS.values()) == 13_803
-    assert summary.snapshots_created == 13_803
-    assert await _count(owner_engine, "SELECT count(*) FROM source_record") == 13_803
-    assert await _count(owner_engine, "SELECT count(*) FROM source_resource_head") == 13_803
-    assert await _count(owner_engine, "SELECT count(*) FROM patient") == 28
-    assert await _count(owner_engine, "SELECT count(*) FROM patient_source_link") == 28
-    assert await _count(owner_engine, "SELECT count(*) FROM data_key") == 28
+    assert summary.records_seen == RESOURCE_TOTAL
+    assert summary.snapshots_created == RESOURCE_TOTAL
+    assert await _count(owner_engine, "SELECT count(*) FROM source_record") == RESOURCE_TOTAL
+    assert await _count(owner_engine, "SELECT count(*) FROM source_resource_head") == RESOURCE_TOTAL
+    assert await _count(owner_engine, "SELECT count(*) FROM patient") == PATIENT_COUNT
+    assert await _count(owner_engine, "SELECT count(*) FROM patient_source_link") == PATIENT_COUNT
+    assert await _count(owner_engine, "SELECT count(*) FROM data_key") == PATIENT_COUNT
 
 
 async def test_snapshots_per_resource_type_match_the_dataset(
@@ -167,8 +160,8 @@ async def test_timeline_rows_per_kind_match_the_dataset(
         counts = {row.kind: row.n for row in rows}
 
     assert counts == TIMELINE_COUNTS
-    assert sum(counts.values()) == 13_034
-    assert await _count(owner_engine, "SELECT count(*) FROM timeline_event") == 13_034
+    assert sum(counts.values()) == TIMELINE_TOTAL
+    assert await _count(owner_engine, "SELECT count(*) FROM timeline_event") == TIMELINE_TOTAL
 
 
 async def test_the_run_is_recorded(ingested: Ingested, owner_engine: AsyncEngine) -> None:
@@ -183,8 +176,8 @@ async def test_the_run_is_recorded(ingested: Ingested, owner_engine: AsyncEngine
         ).all()
 
     assert [tuple(run) for run in runs] == [
-        ("succeeded", 13_803, 13_803, None, True),
-        ("succeeded", 13_803, 0, None, True),
+        ("succeeded", RESOURCE_TOTAL, RESOURCE_TOTAL, None, True),
+        ("succeeded", RESOURCE_TOTAL, 0, None, True),
     ]
 
 
@@ -192,7 +185,7 @@ async def test_running_ingest_again_changes_nothing(ingested: Ingested) -> None:
     second = ingested.second
 
     assert second.status is ImportStatus.SUCCEEDED
-    assert second.records_seen == 13_803
+    assert second.records_seen == RESOURCE_TOTAL
     assert second.snapshots_created == 0
     assert second.heads_moved == 0
     assert second.patients_created == 0
@@ -226,7 +219,7 @@ async def test_each_patients_identity_round_trips(
             assert identity.birth_date == date.fromisoformat(record["birthDate"])
             checked += 1
 
-    assert checked == 28
+    assert checked == PATIENT_COUNT
 
 
 def _identifying_values(*, plaintext_columns: bool = False) -> set[bytes]:
@@ -297,7 +290,7 @@ async def test_no_identifying_value_is_in_any_encrypted_column(
         "timeline_event.detail_enc",
     } <= blobs.keys(), "the scan must cover every sealed column"
     assert sum(len(blob) for blob in blobs.values()) > 1_000_000, "the scan read too little"
-    assert len(needles) > 28 * 4
+    assert len(needles) > PATIENT_COUNT * 4
     leaks = sorted(
         f"{column}: {needle[:3]!r}..."
         for column, blob in blobs.items()
