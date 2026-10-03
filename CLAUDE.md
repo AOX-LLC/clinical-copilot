@@ -27,6 +27,7 @@ docker compose up -d --build --wait   # whole stack; a plain `up` reuses an old 
 docker compose down
 docker compose run --rm seed      # reload the dataset after the fhir service restarts
 docker compose run --rm ingest    # read the FHIR server into the timeline again (idempotent)
+python3 scripts/check-stack-counts.py   # compare a fresh stack with data/synthea/expected-counts.json
 data/synthea/generate.sh --check  # regenerate the dataset and compare with the committed manifest
 
 cd api
@@ -49,7 +50,8 @@ npm run lint && npm run typecheck && npm test
 - `api/app/timeline/normalize/`: the normalizers (source record to timeline rows) and the projector registry.
 - `api/app/ingest/`: the ingest command (`python -m app.ingest`) the `ingest` service runs.
 - `api/app/fhir_seed/`: Synthea bundle transforms and the loader the `seed` service runs.
-- `data/synthea/`: the committed synthetic dataset and `generate.sh`, which regenerates it.
+- `data/synthea/`: the committed synthetic dataset, `generate.sh`, which regenerates it, and `expected-counts.json`.
+- `scripts/`: repository checks that run outside the API's environment, such as the stack-smoke count check.
 - `api/migrations/`: Alembic revisions. They are hand-written, and each one grants the app role exactly what it needs.
 - `api/tests/contracts/`: the contract suite every EHR adapter must pass.
 - `web/`: the Next.js app.
@@ -63,3 +65,4 @@ npm run lint && npm run typecheck && npm test
 - **New tables get an explicit grant to `copilot_app` in their migration,** with the narrowest privileges that work.
 - **A new EHR adapter joins the contract suite** by adding a harness to `HARNESS_FACTORIES`.
 - **Every architectural decision gets a short ADR** in `docs/adr/`.
+- **Dataset and timeline counts live only in `data/synthea/expected-counts.json`.** The tests and the stack-smoke job both read it; change it in the same commit as the dataset or normalizer change that moves a count, never as a literal elsewhere.
