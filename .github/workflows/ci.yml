@@ -110,14 +110,11 @@ jobs:
           curl -fsS http://127.0.0.1:4601/readyz
           curl -fsS http://127.0.0.1:4600/healthz
           curl -fsS -o /dev/null http://127.0.0.1:4603/fhir/r4/metadata
-          # The seed service runs before the API starts: the 28 synthetic patients must be there.
-          patients="$(curl -fsS 'http://127.0.0.1:4603/fhir/r4/Patient?_summary=count' | python3 -c 'import json,sys; print(json.load(sys.stdin)["total"])')"
-          test "$patients" = 28
-          # The ingest service runs before the API starts: the timeline must be filled.
-          sql() { docker compose exec -T postgres psql -U copilot_owner -d clinical_copilot -tAc "$1"; }
-          test "$(sql "SELECT status FROM import_run ORDER BY started_at DESC LIMIT 1")" = succeeded
-          test "$(sql "SELECT count(*) FROM patient")" = 28
-          test "$(sql "SELECT count(*) FROM timeline_event WHERE superseded_at IS NULL")" = 12939
+      - name: Check seeded and ingested counts
+        # Seed and ingest run before the API starts, so the stack must already hold the whole
+        # dataset. The expected numbers come from data/synthea/expected-counts.json, which the
+        # api job's tests also check against the dataset.
+        run: python3 scripts/check-stack-counts.py
       - name: Show logs on failure
         if: failure()
         run: docker compose logs
